@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -22,7 +23,7 @@ jobs:
             os: macos-latest
             asset: nikama-darwin-aarch64
           - target: x86_64-apple-darwin
-            os: macos-13
+            os: macos-15-intel
             asset: nikama-darwin-x86_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -47,6 +48,7 @@ jobs:
           path: ${{ matrix.asset }}.tar.gz
 
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
     steps:
