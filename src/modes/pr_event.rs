@@ -5,7 +5,7 @@ use super::run::{run_by_levels, run_parallel, JobResult, Outcome, RunContext};
 use crate::cli::Env;
 use crate::config::{CommentMode, Config};
 use crate::engine::{Command, Job};
-use crate::github::comment_cmd::HELP_TEXT;
+use crate::github::comment_cmd::help_text;
 use crate::github::events::{
     classify_pr_event, jobs_for_comment, jobs_for_pull_request, select_projects, PrSelector,
 };
@@ -118,6 +118,7 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         main_command,
         &ctx.run_url(),
         config.comment.show_empty_plans,
+        config.wakeup_word(),
     );
     for j in &trigger.jobs {
         report.row_mut(&j.project.name);
@@ -450,7 +451,7 @@ pub(super) async fn build_trigger(
                 tracing::info!("comment is on an issue, not a pull request; ignoring");
                 return Ok(None);
             }
-            let Some(parsed) = parse_comment(&event.comment.body) else {
+            let Some(parsed) = parse_comment(&event.comment.body, &config.wakeup_words) else {
                 tracing::info!("comment is not a nikama command; ignoring");
                 return Ok(None);
             };
@@ -459,21 +460,29 @@ pub(super) async fn build_trigger(
                 Ok(c) => c,
                 Err(e) => {
                     let _ = github
-                        .create_comment(pr_number, &format!("**nikama**: {}\n\n{}", e, HELP_TEXT))
+                        .create_comment(
+                            pr_number,
+                            &format!("**nikama**: {}\n\n{}", e, help_text(&config.wakeup_words)),
+                        )
                         .await;
                     return Err(exit::COMMAND);
                 }
             };
             let command = match cmd.verb {
                 CommentVerb::Help => {
-                    let _ = github.create_comment(pr_number, HELP_TEXT).await;
+                    let _ = github
+                        .create_comment(pr_number, &help_text(&config.wakeup_words))
+                        .await;
                     return Ok(None);
                 }
                 CommentVerb::Run(Command::Destroy) => {
                     let _ = github
                         .create_comment(
                             pr_number,
-                            "**nikama**: `destroy` cannot be run from a PR comment. Use a manually dispatched workflow with `mode: manual` and `command: nikama destroy`.",
+                            &format!(
+                                "**nikama**: `destroy` cannot be run from a PR comment. Use a manually dispatched workflow with `mode: manual` and `command: {} destroy`.",
+                                config.wakeup_word()
+                            ),
                         )
                         .await;
                     return Err(exit::COMMAND);

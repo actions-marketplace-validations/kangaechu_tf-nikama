@@ -65,6 +65,9 @@ pr_locks: true
 # PRs with this label are planned without taking project locks
 # (e.g. the label Renovate / Dependabot adds to version bumps).
 no_lock_label: no-lock
+# Word(s) a PR comment must start with to be treated as a command. A string
+# or a list; the first one is used in help texts. Default: [nikama, digger].
+# wakeup_word: [nikama, digger]
 auto_merge: false
 dependency_configuration:
   mode: hard

@@ -78,12 +78,14 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         }
     };
 
+    let wakeup_words = convert_wakeup_words(raw.wakeup_word.map(OneOrMany::into_vec))?;
+
     // Workflows.
     let mut workflows: BTreeMap<String, Workflow> = BTreeMap::new();
     for (name, wf) in raw.workflows {
         let workflow = match wf {
             None => Workflow::default(),
-            Some(w) => convert_workflow(&name, w)?,
+            Some(w) => convert_workflow(&name, w, &wakeup_words)?,
         };
         workflows.insert(name, workflow);
     }
@@ -134,8 +136,48 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         drift_exclude_patterns,
         concurrency,
         comment,
+        wakeup_words,
         graph,
     })
+}
+
+/// Validate `wakeup_word`: every word is trimmed, must not be empty, must
+/// not contain whitespace and must not look like a flag. Duplicates (case-
+/// insensitive) are dropped. `None` gives the defaults.
+fn convert_wakeup_words(raw: Option<Vec<String>>) -> Result<Vec<String>, ConfigError> {
+    let Some(raw) = raw else {
+        return Ok(DEFAULT_WAKEUP_WORDS.iter().map(|w| w.to_string()).collect());
+    };
+    let mut words: Vec<String> = Vec::new();
+    for w in raw {
+        let w = w.trim();
+        if w.is_empty() {
+            return Err(ConfigError::Validation(
+                "wakeup_word must not be empty".to_string(),
+            ));
+        }
+        if w.chars().any(char::is_whitespace) {
+            return Err(ConfigError::Validation(format!(
+                "wakeup_word '{}' must not contain whitespace",
+                w
+            )));
+        }
+        if w.starts_with('-') {
+            return Err(ConfigError::Validation(format!(
+                "wakeup_word '{}' must not start with '-'",
+                w
+            )));
+        }
+        if !words.iter().any(|x| x.eq_ignore_ascii_case(w)) {
+            words.push(w.to_string());
+        }
+    }
+    if words.is_empty() {
+        return Err(ConfigError::Validation(
+            "wakeup_word must list at least one word".to_string(),
+        ));
+    }
+    Ok(words)
 }
 
 pub(super) fn convert_aws_role(r: &RawAwsRoleToAssume) -> AwsRoleToAssume {
@@ -241,7 +283,11 @@ fn convert_project(p: RawProject) -> Result<Project, ConfigError> {
     })
 }
 
-fn convert_workflow(name: &str, w: RawWorkflow) -> Result<Workflow, ConfigError> {
+fn convert_workflow(
+    name: &str,
+    w: RawWorkflow,
+    wakeup_words: &[String],
+) -> Result<Workflow, ConfigError> {
     let env_vars = match w.env_vars {
         None => EnvVars::default(),
         Some(e) => EnvVars {
@@ -292,7 +338,7 @@ fn convert_workflow(name: &str, w: RawWorkflow) -> Result<Workflow, ConfigError>
         ),
     ] {
         for c in cmds {
-            if crate::engine::Command::parse(c).is_none() {
+            if crate::engine::Command::parse_with(c, wakeup_words).is_none() {
                 return Err(ConfigError::Validation(format!(
                     "workflow '{}': workflow_configuration.{} contains unknown command '{}'",
                     name, field, c

@@ -83,7 +83,7 @@ pub fn jobs_for_pull_request(
             PrSelector::Ignore(_) => vec![],
         };
         for c in commands {
-            let Some(command) = Command::parse(&c) else {
+            let Some(command) = Command::parse_with(&c, &config.wakeup_words) else {
                 tracing::warn!(command = %c, project = %project.name, "unknown workflow command; skipping");
                 continue;
             };

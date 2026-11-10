@@ -568,21 +568,22 @@ async fn apply_without_storage_plans_first_and_reports_it() {
 fn stored_plan_commit_check() {
     use super::run::check_stored_plan_commit;
     // Same commit: fine.
-    assert!(check_stored_plan_commit("p", Some("abc"), Some("abc")).is_ok());
+    assert!(check_stored_plan_commit("p", Some("abc"), Some("abc"), "nikama").is_ok());
     // Different commit: refused, with shortened SHAs.
     let err = check_stored_plan_commit(
         "p",
         Some("0123456789abcdef0123456789abcdef01234567"),
         Some("fedcba9876543210fedcba9876543210fedcba98"),
+        "nikama",
     )
     .unwrap_err();
     assert!(err.contains("from commit 0123456789ab"), "{}", err);
     assert!(err.contains("head is fedcba987654"), "{}", err);
     assert!(err.contains("run `nikama plan` first"), "{}", err);
     // Legacy plan without metadata: accepted.
-    assert!(check_stored_plan_commit("p", None, Some("abc")).is_ok());
+    assert!(check_stored_plan_commit("p", None, Some("abc"), "nikama").is_ok());
     // Outside PR mode nothing to compare against.
-    assert!(check_stored_plan_commit("p", Some("abc"), None).is_ok());
+    assert!(check_stored_plan_commit("p", Some("abc"), None, "nikama").is_ok());
 }
 
 #[tokio::test]

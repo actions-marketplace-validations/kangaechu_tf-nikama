@@ -14,7 +14,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 const MARKER: &str = "<!-- nikama:run=42:attempt=1 -->";
 
 fn report(command: Command, show: ShowEmptyPlans) -> RunReport {
-    let mut r = RunReport::new(MARKER, command, "https://gh/o/r/actions/runs/42", show);
+    let mut r = RunReport::new(
+        MARKER,
+        command,
+        "https://gh/o/r/actions/runs/42",
+        show,
+        "nikama",
+    );
     r.row_mut("b-empty").status = RowStatus::NoChanges;
     r.row_mut("b-empty").detail_kind = Some(DetailKind::Plan);
     r.row_mut("b-empty").detail = Some("No changes.".into());
@@ -74,7 +80,7 @@ fn finished_header_and_empty_plan_modes() {
 
 #[test]
 fn apply_table_uses_apply_summary() {
-    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table);
+    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table, "nikama");
     let row = r.row_mut("p");
     row.status = RowStatus::Applied;
     row.apply_summary = Some(ApplySummary {
@@ -93,7 +99,7 @@ fn apply_table_uses_apply_summary() {
 
 #[test]
 fn apply_row_shows_pre_plan_table_when_present() {
-    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table);
+    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table, "nikama");
     let row = r.row_mut("p");
     row.status = RowStatus::Applied;
     row.detail_kind = Some(DetailKind::Apply);
@@ -110,7 +116,7 @@ fn apply_row_shows_pre_plan_table_when_present() {
 
 #[test]
 fn error_detail_and_failure_flags() {
-    let mut r = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    let mut r = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
     let row = r.row_mut("p");
     row.status = RowStatus::Failed;
     row.detail_kind = Some(DetailKind::Error);
@@ -138,7 +144,13 @@ fn per_project_rendering_has_distinct_markers() {
 
 #[test]
 fn long_details_are_truncated_with_a_log_link() {
-    let mut r = RunReport::new(MARKER, Command::Plan, "https://run", ShowEmptyPlans::Table);
+    let mut r = RunReport::new(
+        MARKER,
+        Command::Plan,
+        "https://run",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     let row = r.row_mut("huge");
     row.status = RowStatus::Changes;
     row.detail_kind = Some(DetailKind::Plan);
@@ -180,7 +192,7 @@ async fn writer_creates_then_edits_single_comment() {
         .mount(&server)
         .await;
 
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
     report.row_mut("p");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     writer.flush().await;
@@ -224,7 +236,7 @@ async fn writer_reuses_existing_comment_with_marker() {
         .mount(&server)
         .await;
 
-    let report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    let report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     writer.finish().await;
     drop(writer);
@@ -256,7 +268,7 @@ async fn writer_finish_stops_task_while_clones_are_alive() {
         .mount(&server)
         .await;
 
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
     report.row_mut("p");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     let held_clone = writer.clone();
@@ -298,7 +310,7 @@ async fn writer_per_project_mode_creates_one_comment_per_project() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .mount(&server)
         .await;
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
     report.row_mut("a");
     report.row_mut("b");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::PerProject);
@@ -375,7 +387,7 @@ async fn issue_notifier_creates_or_updates() {
         .expect(1)
         .mount(&server)
         .await;
-    let n = GithubIssueNotifier::new(github(&server));
+    let n = GithubIssueNotifier::new(github(&server), "nikama");
     n.notify("fresh", "o/r", "plan").await.unwrap();
     n.notify("existing", "o/r", "plan").await.unwrap();
 }

@@ -28,7 +28,7 @@ Supported in the first release:
 - **AWS**: DynamoDB PR locks (schema-compatible with Digger), S3 plan storage,
   GitHub OIDC → STS role assumption, Cognito Identity
 - **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
-- Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project`, `-d/--directory` and `plan --no-lock`; on a closed or merged PR only `unlock` is accepted
+- Comment commands: `nikama plan|apply|lock|unlock|help` (also `digger ...`; the wakeup word is configurable with `wakeup_word`), with `-p/--project`, `-d/--directory` and `plan --no-lock`; on a closed or merged PR only `unlock` is accepted
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
 - Drift detection with Slack webhook or GitHub Issue notifications
 
@@ -268,8 +268,29 @@ with a warning. Unknown keys and keys for unsupported features are errors.
 Top-level keys: `projects`, `workflows`, `generate_projects`,
 `dependency_configuration`, `traverse_to_nested_projects`, `auto_merge`,
 `auto_merge_strategy`, `pr_locks`, `allow_draft_prs`, `no_lock_label`,
-`drift_include_patterns`, `drift_exclude_patterns`, `concurrency`, `comment`
-(plus `git_timeout` and `telemetry`, accepted for compatibility).
+`wakeup_word`, `drift_include_patterns`, `drift_exclude_patterns`,
+`concurrency`, `comment`, `allowed_providers` (plus `git_timeout` and
+`telemetry`, accepted for compatibility).
+
+### Wakeup word
+
+A PR comment is treated as a command when its first non-empty line starts
+with a wakeup word followed by the command: `nikama plan`, `digger apply -p
+app`. By default both `nikama` and `digger` are accepted (case-insensitive).
+`wakeup_word` replaces that list, so set it when another bot in the repository
+reacts to the same words or when you prefer a shorter one:
+
+```yaml
+wakeup_word: tf            # only `tf plan`, `tf apply`, ...
+# or several; the first one is used in help texts and comment footers
+wakeup_word: [tf, nikama]
+```
+
+Each word must be a single token without whitespace. `workflow_configuration`
+entries and the manual-mode `command` input accept the configured words as
+well as the defaults, so `digger plan` keeps working there. Like every other
+key, `wakeup_word` is read from the trusted configuration when `config-ref` is
+set, so a pull request cannot change which comments start a run.
 
 ## Environment variables
 

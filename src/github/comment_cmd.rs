@@ -29,18 +29,23 @@ pub enum CommentParseError {
     FlagNotAllowed(String),
 }
 
-/// Returns `None` when the comment is not addressed to this tool.
-pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseError>> {
+/// Returns `None` when the comment is not addressed to this tool, that is
+/// when its first non-empty line does not start with one of `wakeup_words`
+/// (case-insensitive).
+pub fn parse_comment(
+    body: &str,
+    wakeup_words: &[String],
+) -> Option<Result<CommentCommand, CommentParseError>> {
     let first_line = body.lines().map(str::trim).find(|l| !l.is_empty())?;
     let lower = first_line.to_ascii_lowercase();
-    let rest = lower
-        .strip_prefix("digger ")
-        .or_else(|| lower.strip_prefix("nikama "))
-        .or_else(|| {
-            if lower == "digger" || lower == "nikama" {
+    let rest = wakeup_words
+        .iter()
+        .map(|w| w.to_ascii_lowercase())
+        .find_map(|w| {
+            if lower == w {
                 Some("")
             } else {
-                None
+                lower.strip_prefix(&format!("{} ", w))
             }
         })?;
     // Re-split the original (case preserved) text after the prefix for values.
@@ -115,35 +120,64 @@ pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseEr
     }))
 }
 
-pub const HELP_TEXT: &str = "\
+/// The `help` reply, written with the configured wakeup word(s). The first
+/// word is used in the examples; any others are listed as alternatives.
+pub fn help_text(wakeup_words: &[String]) -> String {
+    let w = wakeup_words.first().map(String::as_str).unwrap_or("nikama");
+    let mut s = format!(
+        "\
 **nikama commands**
 
 | Command | Description |
 |---|---|
-| `nikama plan` | Plan all projects impacted by this PR |
-| `nikama plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
-| `nikama plan --no-lock` | Plan without taking project locks (locks this PR already holds for the planned projects are released) |
-| `nikama apply` | Apply all impacted projects (PR must be mergeable) |
-| `nikama apply -p <project>` | Apply selected project(s) |
-| `nikama lock` / `nikama unlock` | Acquire / release the PR-level lock for impacted projects |
-| `nikama help` | Show this message |
-
-`digger` can be used in place of `nikama` in every command.";
+| `{w} plan` | Plan all projects impacted by this PR |
+| `{w} plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
+| `{w} plan --no-lock` | Plan without taking project locks (locks this PR already holds for the planned projects are released) |
+| `{w} apply` | Apply all impacted projects (PR must be mergeable) |
+| `{w} apply -p <project>` | Apply selected project(s) |
+| `{w} lock` / `{w} unlock` | Acquire / release the PR-level lock for impacted projects |
+| `{w} help` | Show this message |"
+    );
+    let others: Vec<String> = wakeup_words
+        .iter()
+        .skip(1)
+        .map(|o| format!("`{}`", o))
+        .collect();
+    if !others.is_empty() {
+        s.push_str(&format!(
+            "\n\n{} can be used in place of `{}` in every command.",
+            others.join(", "),
+            w
+        ));
+    }
+    s
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn words() -> Vec<String> {
+        crate::config::DEFAULT_WAKEUP_WORDS
+            .iter()
+            .map(|w| w.to_string())
+            .collect()
+    }
+
+    fn parse(body: &str) -> Option<Result<CommentCommand, CommentParseError>> {
+        parse_comment(body, &words())
+    }
+
     #[test]
     fn parses_basic() {
-        let c = parse_comment("digger plan").unwrap().unwrap();
+        let c = parse("digger plan").unwrap().unwrap();
         assert_eq!(c.verb, CommentVerb::Run(Command::Plan));
         assert!(c.projects.is_empty());
     }
 
     #[test]
     fn parses_flags() {
-        let c = parse_comment("Digger apply -p Vpc --project app -d dev/db")
+        let c = parse("Digger apply -p Vpc --project app -d dev/db")
             .unwrap()
             .unwrap();
         assert_eq!(c.verb, CommentVerb::Run(Command::Apply));
@@ -153,42 +187,78 @@ mod tests {
 
     #[test]
     fn parses_no_lock() {
-        let c = parse_comment("digger plan --no-lock -p vpc")
-            .unwrap()
-            .unwrap();
+        let c = parse("digger plan --no-lock -p vpc").unwrap().unwrap();
         assert_eq!(c.verb, CommentVerb::Run(Command::Plan));
         assert!(c.no_lock);
         assert_eq!(c.projects, vec!["vpc"]);
-        assert!(!parse_comment("digger plan").unwrap().unwrap().no_lock);
+        assert!(!parse("digger plan").unwrap().unwrap().no_lock);
         assert_eq!(
-            parse_comment("digger apply --no-lock").unwrap(),
+            parse("digger apply --no-lock").unwrap(),
             Err(CommentParseError::FlagNotAllowed("--no-lock".into()))
         );
         assert_eq!(
-            parse_comment("digger unlock --no-lock").unwrap(),
+            parse("digger unlock --no-lock").unwrap(),
             Err(CommentParseError::FlagNotAllowed("--no-lock".into()))
         );
     }
 
     #[test]
     fn ignores_unrelated() {
-        assert!(parse_comment("LGTM, nice work").is_none());
-        assert!(parse_comment("").is_none());
+        assert!(parse("LGTM, nice work").is_none());
+        assert!(parse("").is_none());
+        // A wakeup word followed by other characters is not a command.
+        assert!(parse("nikama-bot plan").is_none());
+        assert!(parse("diggerplan").is_none());
     }
 
     #[test]
     fn errors() {
         assert_eq!(
-            parse_comment("digger noop").unwrap(),
+            parse("digger noop").unwrap(),
             Err(CommentParseError::UnknownCommand("noop".into()))
         );
         assert_eq!(
-            parse_comment("digger plan -p").unwrap(),
+            parse("digger plan -p").unwrap(),
             Err(CommentParseError::MissingValue("-p".into()))
         );
         assert_eq!(
-            parse_comment("nikama help").unwrap().unwrap().verb,
+            parse("nikama help").unwrap().unwrap().verb,
             CommentVerb::Help
         );
+        assert_eq!(parse("nikama").unwrap().unwrap().verb, CommentVerb::Help);
+    }
+
+    #[test]
+    fn configured_wakeup_words_replace_the_defaults() {
+        let tf = vec!["tf".to_string()];
+        let c = parse_comment("TF apply -p app", &tf).unwrap().unwrap();
+        assert_eq!(c.verb, CommentVerb::Run(Command::Apply));
+        assert_eq!(c.projects, vec!["app"]);
+        assert_eq!(
+            parse_comment("tf", &tf).unwrap().unwrap().verb,
+            CommentVerb::Help
+        );
+        assert!(parse_comment("digger plan", &tf).is_none());
+        assert!(parse_comment("nikama plan", &tf).is_none());
+
+        let both = vec!["Terraform".to_string(), "nikama".to_string()];
+        assert!(parse_comment("terraform plan", &both).is_some());
+        assert!(parse_comment("nikama plan", &both).is_some());
+        assert!(parse_comment("digger plan", &both).is_none());
+    }
+
+    #[test]
+    fn help_text_uses_the_configured_word() {
+        let h = help_text(&words());
+        assert!(h.contains("| `nikama plan` |"));
+        assert!(h.contains("`digger` can be used in place of `nikama`"));
+
+        let h = help_text(&["tf".to_string()]);
+        assert!(h.contains("| `tf apply -p <project>` |"));
+        assert!(!h.contains("nikama plan"));
+        assert!(!h.contains("in place of"));
+
+        let h = help_text(&["tf".to_string(), "iac".to_string(), "x".to_string()]);
+        assert!(h.contains("`iac`, `x` can be used in place of `tf`"));
     }
 }
