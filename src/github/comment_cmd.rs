@@ -13,6 +13,8 @@ pub struct CommentCommand {
     pub verb: CommentVerb,
     pub projects: Vec<String>,
     pub dirs: Vec<String>,
+    /// `--no-lock`: plan without taking project locks (plan only).
+    pub no_lock: bool,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -23,6 +25,8 @@ pub enum CommentParseError {
     UnknownFlag(String),
     #[error("flag '{0}' requires a value")]
     MissingValue(String),
+    #[error("flag '{0}' is only accepted with `plan`")]
+    FlagNotAllowed(String),
 }
 
 /// Returns `None` when the comment is not addressed to this tool.
@@ -56,6 +60,7 @@ pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseEr
                 verb: CommentVerb::Help,
                 projects: vec![],
                 dirs: vec![],
+                no_lock: false,
             }))
         }
     };
@@ -68,6 +73,7 @@ pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseEr
     };
     let mut projects = Vec::new();
     let mut dirs = Vec::new();
+    let mut no_lock = false;
     while let Some(tok) = iter.next() {
         let (flag, inline) = match tok.split_once('=') {
             Some((f, v)) if f.starts_with('-') => (f.to_string(), Some(v.to_string())),
@@ -88,6 +94,12 @@ pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseEr
                 };
                 dirs.push(v);
             }
+            "--no-lock" => {
+                if verb != CommentVerb::Run(Command::Plan) {
+                    return Some(Err(CommentParseError::FlagNotAllowed(flag)));
+                }
+                no_lock = true;
+            }
             other if other.starts_with('-') => {
                 return Some(Err(CommentParseError::UnknownFlag(other.to_string())))
             }
@@ -99,6 +111,7 @@ pub fn parse_comment(body: &str) -> Option<Result<CommentCommand, CommentParseEr
         verb,
         projects,
         dirs,
+        no_lock,
     }))
 }
 
@@ -109,6 +122,7 @@ pub const HELP_TEXT: &str = "\
 |---|---|
 | `nikama plan` | Plan all projects impacted by this PR |
 | `nikama plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
+| `nikama plan --no-lock` | Plan without taking project locks (locks this PR already holds for the planned projects are released) |
 | `nikama apply` | Apply all impacted projects (PR must be mergeable) |
 | `nikama apply -p <project>` | Apply selected project(s) |
 | `nikama lock` / `nikama unlock` | Acquire / release the PR-level lock for impacted projects |
@@ -135,6 +149,25 @@ mod tests {
         assert_eq!(c.verb, CommentVerb::Run(Command::Apply));
         assert_eq!(c.projects, vec!["Vpc", "app"]);
         assert_eq!(c.dirs, vec!["dev/db"]);
+    }
+
+    #[test]
+    fn parses_no_lock() {
+        let c = parse_comment("digger plan --no-lock -p vpc")
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.verb, CommentVerb::Run(Command::Plan));
+        assert!(c.no_lock);
+        assert_eq!(c.projects, vec!["vpc"]);
+        assert!(!parse_comment("digger plan").unwrap().unwrap().no_lock);
+        assert_eq!(
+            parse_comment("digger apply --no-lock").unwrap(),
+            Err(CommentParseError::FlagNotAllowed("--no-lock".into()))
+        );
+        assert_eq!(
+            parse_comment("digger unlock --no-lock").unwrap(),
+            Err(CommentParseError::FlagNotAllowed("--no-lock".into()))
+        );
     }
 
     #[test]

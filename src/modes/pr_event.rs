@@ -31,6 +31,8 @@ pub(super) struct Trigger {
     /// Would this event normally plan or apply? When it does and there is
     /// nothing to do, the commit statuses are still set.
     pub(super) expects_plan_or_apply: bool,
+    /// `--no-lock` was given on the comment.
+    pub(super) no_lock_flag: bool,
 }
 
 pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: GithubClient) -> i32 {
@@ -160,8 +162,27 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         }
     };
     let keep_locks: Vec<String> = trigger.jobs.iter().map(|j| j.lock_id()).collect();
-    let plan = acquire_locks(&locker, trigger.pr_number, trigger.jobs).await;
+    let no_lock_reason = no_lock_reason(&trigger, &config, &pr);
+    let plan = acquire_locks(
+        &locker,
+        trigger.pr_number,
+        trigger.jobs,
+        no_lock_reason.is_some(),
+    )
+    .await;
     let lock_failed = plan.failed;
+    if let Some(reason) = no_lock_reason {
+        let mut notes = vec![format!(
+            "planned without taking project locks ({}); `nikama apply` takes them as usual",
+            reason
+        )];
+        notes.extend(
+            plan.released
+                .iter()
+                .map(|p| format!("released lock of `{}` (planned without lock)", p)),
+        );
+        writer.update(move |r| r.notes.extend(notes));
+    }
     for (name, status, detail) in plan.rows {
         writer.update(move |r| {
             let row = r.row_mut(&name);
@@ -413,6 +434,7 @@ pub(super) async fn build_trigger(
                 head_sha: event.pull_request.head.sha.clone(),
                 impacted: impacted.len(),
                 expects_plan_or_apply: selector == PrSelector::Pushed,
+                no_lock_flag: false,
             }))
         }
         "issue_comment" => {
@@ -531,6 +553,7 @@ pub(super) async fn build_trigger(
                 head_sha: pr.head_sha.clone(),
                 impacted: impacted.len(),
                 expects_plan_or_apply: matches!(command, Command::Plan | Command::Apply),
+                no_lock_flag: cmd.no_lock,
             }))
         }
         "merge_group" => {
@@ -562,6 +585,8 @@ pub(super) struct LockPlan {
     /// (project, status, error detail) for jobs that will not run.
     pub rows: Vec<(String, RowStatus, Option<String>)>,
     pub failed: bool,
+    /// Projects whose lock this PR held and gave up for a no-lock plan.
+    pub released: Vec<String>,
 }
 
 fn lockable(job: &Job) -> bool {
@@ -579,7 +604,17 @@ fn lockable(job: &Job) -> bool {
 /// PR, nothing new is acquired and anything acquired in this run is released
 /// again; only jobs whose lock this PR already held from an earlier run keep
 /// running. Jobs that need no lock (`lock` / `unlock`) always run.
-pub(super) async fn acquire_locks(locker: &PrLocker, pr: u64, jobs: Vec<Job>) -> LockPlan {
+///
+/// With `no_lock_plan`, `plan` jobs need no lock either: they run whoever
+/// holds the project, and a lock this PR already holds for a planned project
+/// is released, so a PR that is only being planned blocks nobody. Apply and
+/// destroy jobs always take their locks.
+pub(super) async fn acquire_locks(
+    locker: &PrLocker,
+    pr: u64,
+    jobs: Vec<Job>,
+    no_lock_plan: bool,
+) -> LockPlan {
     /// What phase 1 learned about one job.
     enum Pre {
         /// Needs no lock (`lock` / `unlock` jobs).
@@ -595,6 +630,7 @@ pub(super) async fn acquire_locks(locker: &PrLocker, pr: u64, jobs: Vec<Job>) ->
         runnable: Vec::new(),
         rows: Vec::new(),
         failed: false,
+        released: Vec::new(),
     };
 
     // Phase 1: look, do not touch.
@@ -602,6 +638,29 @@ pub(super) async fn acquire_locks(locker: &PrLocker, pr: u64, jobs: Vec<Job>) ->
     let mut blocked: Vec<(String, u64)> = Vec::new();
     for job in &jobs {
         if !lockable(job) {
+            pre.push(Pre::NoLock);
+            continue;
+        }
+        if no_lock_plan && job.command == Command::Plan {
+            // Give back a lock from an earlier (locking) run of this PR; a
+            // failure here only means the lock stays, the plan still runs.
+            let resource = job.lock_id();
+            match locker.status(pr, &resource).await {
+                Ok(HolderStatus::Ours) => match locker.unlock(pr, &resource).await {
+                    Ok(true) => {
+                        tracing::info!(project = %job.project.name, "released lock for a no-lock plan");
+                        plan.released.push(job.project.name.clone());
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(project = %job.project.name, error = %e, "could not release the lock before a no-lock plan")
+                    }
+                },
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(project = %job.project.name, error = %e, "could not check the lock before a no-lock plan")
+                }
+            }
             pre.push(Pre::NoLock);
             continue;
         }
@@ -816,6 +875,27 @@ pub(super) fn closed_pr_rejection(pr: &crate::github::PrInfo, command: Command) 
         "this pull request is {}; `{}` is not run on closed pull requests (only `nikama unlock` is accepted).",
         state, command
     ))
+}
+
+/// Why this run plans without locks, if it does: the comment said
+/// `--no-lock`, or the PR carries `no_lock_label`. Only runs that plan
+/// something qualify.
+pub(super) fn no_lock_reason(
+    trigger: &Trigger,
+    config: &Config,
+    pr: &crate::github::PrInfo,
+) -> Option<String> {
+    if !trigger.jobs.iter().any(|j| j.command == Command::Plan) {
+        return None;
+    }
+    if trigger.no_lock_flag {
+        return Some("`--no-lock`".to_string());
+    }
+    let label = config.no_lock_label.as_deref()?;
+    pr.labels
+        .iter()
+        .any(|l| l.eq_ignore_ascii_case(label))
+        .then(|| format!("label `{}`", label))
 }
 
 /// Why a comment command is refused on a draft pull request, if it is.

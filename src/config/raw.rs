@@ -23,6 +23,7 @@ pub struct RawConfig {
     pub auto_merge_strategy: Option<String>,
     pub pr_locks: Option<bool>,
     pub allow_draft_prs: Option<bool>,
+    pub no_lock_label: Option<String>,
     pub git_timeout: Option<i64>,
     pub telemetry: Option<bool>,
     #[serde(default)]

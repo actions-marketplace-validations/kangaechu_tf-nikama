@@ -55,6 +55,8 @@ pub struct PrInfo {
     pub mergeable_state: Option<String>,
     /// Login of the user who opened the PR.
     pub author: String,
+    /// Names of the labels on the PR.
+    pub labels: Vec<String>,
 }
 
 impl PrInfo {
@@ -274,6 +276,14 @@ impl GithubClient {
             mergeable: v["mergeable"].as_bool(),
             mergeable_state: v["mergeable_state"].as_str().map(|s| s.to_string()),
             author: v["user"]["login"].as_str().unwrap_or_default().to_string(),
+            labels: v["labels"]
+                .as_array()
+                .map(|ls| {
+                    ls.iter()
+                        .filter_map(|l| l["name"].as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 

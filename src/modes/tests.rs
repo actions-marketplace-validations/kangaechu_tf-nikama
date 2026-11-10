@@ -2,8 +2,8 @@
 
 use super::pr_event::{
     acquire_locks, all_plans_empty, apply_gate, check_approved, check_blocked, check_undiverged,
-    closed_pr_rejection, draft_pr_rejection, required_checks, set_noop_statuses, summarize,
-    sweep_locks, ApplyGate,
+    closed_pr_rejection, draft_pr_rejection, no_lock_reason, required_checks, set_noop_statuses,
+    summarize, sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -25,6 +25,7 @@ fn pr(merged: bool, state: &str, mergeable: Option<bool>, mergeable_state: Optio
         mergeable,
         mergeable_state: mergeable_state.map(|s| s.to_string()),
         author: "author".into(),
+        labels: vec![],
     }
 }
 
@@ -737,7 +738,7 @@ async fn locks_all_free_are_all_taken() {
     let server = MockServer::start().await;
     let mem = Arc::new(MemLock::default());
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
     assert!(!plan.failed);
     assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
     assert!(plan.rows.is_empty());
@@ -752,7 +753,7 @@ async fn locks_held_by_another_pr_block_new_acquisition() {
     mock_pr_state(&server, 2, "open").await;
     let mem = Arc::new(MemLock::holding(&[("o/r#b", 2)]));
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
     assert!(plan.failed);
     assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
     let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
@@ -778,7 +779,7 @@ async fn locks_already_ours_still_run_when_others_are_blocked() {
         j.command = Command::Unlock;
         j
     });
-    let plan = acquire_locks(&locker, 1, jobs).await;
+    let plan = acquire_locks(&locker, 1, jobs, false).await;
     assert!(plan.failed);
     // `a` is held from an earlier run, the unlock job needs no lock.
     assert_eq!(names(&plan.runnable), vec!["a", "c"]);
@@ -834,7 +835,7 @@ async fn lost_race_releases_locks_taken_in_this_run() {
         tripped: Default::default(),
     });
     let locker = pr_locker(&server, race.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
     assert!(plan.failed);
     assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
     let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
@@ -1209,4 +1210,145 @@ async fn plan_comment_on_draft_pr_is_rejected_with_a_comment() {
         .unwrap()
         .iter()
         .all(|r| !r.url.path().ends_with("/files")));
+}
+
+// ---------------------------------------------------------------------------
+// Planning without locks (`plan --no-lock`, `no_lock_label`).
+
+#[tokio::test]
+async fn no_lock_plan_takes_nothing_and_runs_despite_other_holders() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    // a: held by this PR from an earlier run, b: held by PR 2, c: free.
+    let mem = Arc::new(MemLock::holding(&[("o/r#a", 1), ("o/r#b", 2)]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), true).await;
+    assert!(!plan.failed);
+    assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
+    assert!(plan.rows.is_empty());
+    assert_eq!(plan.released, vec!["a"]);
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), None);
+    assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn no_lock_does_not_apply_to_apply_jobs() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    let mem = Arc::new(MemLock::holding(&[("o/r#b", 2)]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Apply), true).await;
+    assert!(plan.failed);
+    assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
+    assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
+}
+
+fn trigger_with(jobs: Vec<Job>, no_lock_flag: bool) -> super::pr_event::Trigger {
+    super::pr_event::Trigger {
+        pr_number: 1,
+        jobs,
+        covers_all_impacted: true,
+        notes: vec![],
+        comment_id: None,
+        release_all_locks: false,
+        head_sha: "s".into(),
+        impacted: 3,
+        expects_plan_or_apply: true,
+        no_lock_flag,
+    }
+}
+
+#[test]
+fn no_lock_reason_from_flag_or_label() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let labelled = load_from_str(
+        "projects:\n  - name: a\n    dir: a\nno_lock_label: No-Lock\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let mut with_label = pr(false, "open", Some(true), Some("clean"));
+    with_label.labels = vec!["bug".into(), "no-lock".into()];
+    let without_label = pr(false, "open", Some(true), Some("clean"));
+
+    // The comment flag works without any configuration.
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Plan), true),
+            &plain,
+            &without_label
+        ),
+        Some("`--no-lock`".into())
+    );
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Plan), false),
+            &plain,
+            &with_label
+        ),
+        None
+    );
+    // The label is matched case-insensitively, only when configured.
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Plan), false),
+            &labelled,
+            &with_label
+        ),
+        Some("label `No-Lock`".into())
+    );
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Plan), false),
+            &labelled,
+            &without_label
+        ),
+        None
+    );
+    // Runs that plan nothing never qualify.
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Apply), true),
+            &labelled,
+            &with_label
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn plan_comment_with_no_lock_sets_the_flag() {
+    use super::pr_event::build_trigger;
+    use crate::github::GithubClient;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let server = MockServer::start().await;
+    mock_role(&server, "alice", "write").await;
+    mock_pr_state(&server, 5, "open").await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/5/files"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!([{"filename": "a/main.tf"}])),
+        )
+        .mount(&server)
+        .await;
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+
+    let trigger = build_trigger(
+        &config,
+        &comment_context("alice", "digger plan --no-lock"),
+        &github,
+    )
+    .await
+    .unwrap()
+    .expect("trigger");
+    assert!(trigger.no_lock_flag);
+    assert_eq!(trigger.jobs.len(), 1);
+    let trigger = build_trigger(&config, &comment_context("alice", "digger plan"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert!(!trigger.no_lock_flag);
 }

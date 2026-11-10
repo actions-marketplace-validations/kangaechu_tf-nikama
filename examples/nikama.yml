@@ -62,6 +62,9 @@ workflows:
       on_commit_to_default: ["digger unlock"]
 
 pr_locks: true
+# PRs with this label are planned without taking project locks
+# (e.g. the label Renovate / Dependabot adds to version bumps).
+no_lock_label: no-lock
 auto_merge: false
 dependency_configuration:
   mode: hard

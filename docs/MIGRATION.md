@@ -257,6 +257,7 @@ These change what you see, not what you configure.
 | Comment on a plain issue | API error | ignored, exits 0 |
 | Comment command from a user without write access | runs | refused with a comment, exits 0 (see README "Who can run commands") |
 | `ready_for_review` | ignored | runs `on_pull_request_pushed` |
+| Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see README "How a run works") |
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |
 | Replace in plan summary | counted as create or delete | own column (`±`) |
 | `destroy` failure (manual mode) | reported as success | reported as failure |
