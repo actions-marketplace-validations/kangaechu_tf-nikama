@@ -128,7 +128,7 @@ fn job_names_and_tool() {
 }
 
 #[test]
-fn skip_merge_check_follows_apply_requirements() {
+fn apply_requirements_do_not_imply_skip_merge_check() {
     let c = load_from_str(
         "projects:\n  - name: a\n    dir: a\n    apply_requirements: [approved]\n",
         tempfile::tempdir().unwrap().path(),
@@ -146,7 +146,8 @@ fn skip_merge_check_follows_apply_requirements() {
         "",
         "",
     );
-    assert!(job.skip_merge_check);
+    assert!(!job.skip_merge_check);
+    assert_eq!(job.project.apply_requirements, vec!["approved".to_string()]);
 }
 
 struct Fixture {

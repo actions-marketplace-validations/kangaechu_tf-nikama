@@ -424,21 +424,35 @@ pub(super) enum ApplyGate {
     CheckStatuses,
 }
 
-/// Apply is allowed when the PR is merged, mergeable, or every apply job has
-/// `skip_merge_check`.
+/// Union of `apply_requirements` over the apply jobs. A job whose workflow
+/// sets `skip_merge_check` contributes no `mergeable` requirement.
+pub(super) fn required_checks(jobs: &[Job]) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    for j in jobs.iter().filter(|j| j.command == Command::Apply) {
+        for r in &j.project.apply_requirements {
+            if r == "mergeable" && j.skip_merge_check {
+                continue;
+            }
+            out.insert(r.clone());
+        }
+    }
+    out
+}
+
+/// The `mergeable` part of the apply preconditions (network-free).
+///
+/// A closed, unmerged PR is always denied. A merged PR is always allowed
+/// (apply after merge). Otherwise the GitHub mergeability of the PR decides,
+/// unless no apply job requires `mergeable`.
 pub(super) fn apply_gate(pr: &crate::github::PrInfo, jobs: &[Job]) -> ApplyGate {
-    if jobs
-        .iter()
-        .filter(|j| j.command == Command::Apply)
-        .all(|j| j.skip_merge_check)
-    {
-        return ApplyGate::Allowed;
+    if pr.state == "closed" && !pr.merged {
+        return ApplyGate::Denied("pull request is closed".into());
     }
     if pr.merged {
         return ApplyGate::Allowed;
     }
-    if pr.state == "closed" {
-        return ApplyGate::Denied("pull request is closed".into());
+    if !required_checks(jobs).contains("mergeable") {
+        return ApplyGate::Allowed;
     }
     match (pr.mergeable, pr.mergeable_state.as_deref()) {
         (Some(true), Some("clean"))
@@ -487,22 +501,111 @@ pub(super) fn check_required_statuses(
     }
 }
 
+/// `approved` requirement: the latest non-dismissed review of every reviewer
+/// other than the PR author is considered; at least one must be `APPROVED`
+/// and none may be `CHANGES_REQUESTED`. `COMMENTED` / `PENDING` reviews do not
+/// change a reviewer's verdict.
+pub(super) fn check_approved(
+    reviews: &[crate::github::client::ReviewInfo],
+    author: &str,
+) -> Result<(), String> {
+    let mut latest: std::collections::BTreeMap<&str, &str> = std::collections::BTreeMap::new();
+    for r in reviews {
+        if r.user == author {
+            continue;
+        }
+        match r.state.as_str() {
+            "APPROVED" | "CHANGES_REQUESTED" => {
+                latest.insert(r.user.as_str(), r.state.as_str());
+            }
+            // A dismissed review no longer counts for that reviewer.
+            "DISMISSED" => {
+                latest.remove(r.user.as_str());
+            }
+            _ => {}
+        }
+    }
+    let blocking: Vec<&str> = latest
+        .iter()
+        .filter(|(_, s)| **s == "CHANGES_REQUESTED")
+        .map(|(u, _)| *u)
+        .collect();
+    if !blocking.is_empty() {
+        return Err(format!(
+            "changes requested by {}",
+            blocking
+                .iter()
+                .map(|u| format!("@{}", u))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if latest.values().any(|s| *s == "APPROVED") {
+        Ok(())
+    } else {
+        Err("pull request has no approving review".into())
+    }
+}
+
+/// `undiverged` requirement: the PR head must not be behind its base branch.
+pub(super) fn check_undiverged(cmp: &crate::github::client::CompareInfo) -> Result<(), String> {
+    if cmp.behind_by == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "pull request is {} commit(s) behind the base branch; update the branch first",
+            cmp.behind_by
+        ))
+    }
+}
+
 async fn apply_allowed(
     github: &GithubClient,
     pr: &crate::github::PrInfo,
     jobs: &[Job],
     own_context: &str,
 ) -> Result<(), String> {
+    let mut reasons: Vec<String> = Vec::new();
     match apply_gate(pr, jobs) {
-        ApplyGate::Allowed => Ok(()),
-        ApplyGate::Denied(reason) => Err(reason),
+        ApplyGate::Allowed => {}
+        // A closed PR fails every other check as well; stop here.
+        ApplyGate::Denied(reason) if pr.state == "closed" => return Err(reason),
+        ApplyGate::Denied(reason) => reasons.push(reason),
         ApplyGate::CheckStatuses => {
             let combined = github
                 .combined_status(&pr.head_sha)
                 .await
                 .map_err(|e| format!("could not read commit status: {}", e))?;
-            check_required_statuses(&combined, own_context)
+            if let Err(reason) = check_required_statuses(&combined, own_context) {
+                reasons.push(reason);
+            }
         }
+    }
+    if !pr.merged {
+        let required = required_checks(jobs);
+        if required.contains("approved") {
+            let reviews = github
+                .list_reviews(pr.number)
+                .await
+                .map_err(|e| format!("could not list reviews: {}", e))?;
+            if let Err(reason) = check_approved(&reviews, &pr.author) {
+                reasons.push(reason);
+            }
+        }
+        if required.contains("undiverged") {
+            let cmp = github
+                .compare(&pr.base_ref, &pr.head_sha)
+                .await
+                .map_err(|e| format!("could not compare with the base branch: {}", e))?;
+            if let Err(reason) = check_undiverged(&cmp) {
+                reasons.push(reason);
+            }
+        }
+    }
+    if reasons.is_empty() {
+        Ok(())
+    } else {
+        Err(reasons.join("; "))
     }
 }
 

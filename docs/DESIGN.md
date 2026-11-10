@@ -204,7 +204,7 @@ clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マ
 | `include_patterns` / `exclude_patterns` | doublestar glob。`.` 始まりは `dir` 基準 |
 | `depends_on` | 名前が存在すること、閉路禁止 |
 | `layer`、`alias`、`block_name`、`branch` | 受理、`alias` は表示に使用 |
-| `apply_requirements` | `[mergeable]`。許容値 approved / mergeable / undiverged。`mergeable` を含まないと `skip_merge_check` の既定が true になる |
+| `apply_requirements` | `[mergeable]`。許容値 approved / mergeable / undiverged。各値は独立したチェックとして apply 前に評価する（§6.5）。`mergeable` を外しても他のチェックや closed PR の拒否は残る（現行は backendless では approved / undiverged を無視し、`mergeable` を含まないと `skip_merge_check` 相当になるが、本ツールでは全て実施する） |
 | `drift_detection` | `true` |
 | `drift_include_patterns` / `drift_exclude_patterns` | `[]` |
 | `aws_role_to_assume` | `{aws_role_region (既定 us-east-1), state, command}`。片方のみ指定時は他方にコピー |
@@ -309,7 +309,11 @@ clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マ
 
 ### 6.5 apply の前提条件と auto-merge
 
-- apply 実行条件: `merged == true`、または `mergeable == true` かつ `mergeable_state ∈ {clean, unstable, has_hooks}`、または `skip_merge_check`。
+- closed かつ未マージの PR では常に拒否。`merged == true` なら常に許可（マージ後 apply）。それ以外は対象 apply ジョブの `apply_requirements` の和集合を全て満たすこと。
+  - `mergeable`: `mergeable == true` かつ `mergeable_state ∈ {clean, unstable, has_hooks}`。workflow の `skip_merge_check: true` はこのチェックだけを省略する。
+  - `approved`: `GET /pulls/{n}/reviews` を取得し、PR 作者以外のレビュアーごとに最新の `APPROVED` / `CHANGES_REQUESTED` を採る（`DISMISSED` はそのレビュアーの判定を取り消す。`COMMENTED` / `PENDING` は無視）。`CHANGES_REQUESTED` が 1 件でも残っていれば拒否、`APPROVED` が 1 件もなければ拒否。古いコミットへの承認の無効化は GitHub 側の "Dismiss stale approvals" に任せる。
+  - `undiverged`: `GET /compare/{base}...{head_sha}` の `behind_by` が 0 でなければ拒否。
+  - 複数のチェックに失敗した場合は理由を `; ` で連結してコメントと commit status に出す。
 - `mergeable_state == blocked` のとき、現行は check-run を見て「digger/apply 以外が全部 success なら可」と判定するが、本ツールでは **commit status の combined state** を見る（本ツールは check-run を作らないため）。`digger/apply` と `digger/plan` を除いた status が全て success なら可とする。
 - auto-merge: `auto_merge: true` かつ全 apply 成功かつ `atLeastOneApply` かつ対象が影響プロジェクト全件のとき、combined status が success で mergeable なら `auto_merge_strategy` でマージ。
 

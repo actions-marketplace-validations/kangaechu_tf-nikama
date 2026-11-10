@@ -107,8 +107,9 @@ impl Job {
         run_env.insert("PR_BRANCH".to_string(), pr_branch.to_string());
         run_env.insert("PROJECT_NAME".to_string(), project.name.clone());
         run_env.insert("PROJECT_DIR".to_string(), project.dir.clone());
-        let skip_merge_check = workflow.configuration.skip_merge_check
-            || !project.apply_requirements.iter().any(|r| r == "mergeable");
+        // Only the explicit workflow flag skips the mergeable check; the
+        // project's `apply_requirements` are evaluated one by one at apply time.
+        let skip_merge_check = workflow.configuration.skip_merge_check;
         Job {
             project: project.clone(),
             workflow: workflow.clone(),

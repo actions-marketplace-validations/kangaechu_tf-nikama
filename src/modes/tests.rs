@@ -1,10 +1,13 @@
 //! Orchestration tests: apply gating, summaries, dependency-level execution.
 
-use super::pr_event::{apply_gate, check_required_statuses, summarize, ApplyGate};
+use super::pr_event::{
+    apply_gate, check_approved, check_required_statuses, check_undiverged, required_checks,
+    summarize, ApplyGate,
+};
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
 use crate::engine::{Command, Job, PlanResult, PlanSummary};
-use crate::github::client::{CombinedStatus, StatusEntry};
+use crate::github::client::{CombinedStatus, CompareInfo, ReviewInfo, StatusEntry};
 use crate::github::PrInfo;
 use crate::storage::NoopPlanStorage;
 use std::sync::Arc;
@@ -20,15 +23,25 @@ fn pr(merged: bool, state: &str, mergeable: Option<bool>, mergeable_state: Optio
         draft: false,
         mergeable,
         mergeable_state: mergeable_state.map(|s| s.to_string()),
+        author: "author".into(),
     }
 }
 
 fn apply_jobs(skip: bool) -> Vec<Job> {
+    apply_jobs_with(skip, None)
+}
+
+/// Apply job for one project; `requirements` is the raw `apply_requirements`
+/// list (`None` keeps the default).
+fn apply_jobs_with(skip: bool, requirements: Option<&str>) -> Vec<Job> {
     let tmp = tempfile::tempdir().unwrap();
+    let req = requirements
+        .map(|r| format!("    apply_requirements: {}\n", r))
+        .unwrap_or_default();
     let c = load_from_str(
         &format!(
-            "projects:\n  - name: a\n    dir: a\n    workflow: w\nworkflows:\n  w:\n    workflow_configuration:\n      skip_merge_check: {}\n",
-            skip
+            "projects:\n  - name: a\n    dir: a\n    workflow: w\n{}workflows:\n  w:\n    workflow_configuration:\n      skip_merge_check: {}\n",
+            req, skip
         ),
         tmp.path(),
     )
@@ -83,7 +96,7 @@ fn apply_gate_decisions() {
     assert!(
         matches!(apply_gate(&pr(false, "open", Some(true), Some("behind")), &jobs), ApplyGate::Denied(m) if m.contains("behind"))
     );
-    // skip_merge_check bypasses everything.
+    // skip_merge_check bypasses the mergeable check on an open PR ...
     assert_eq!(
         apply_gate(
             &pr(false, "open", Some(false), Some("dirty")),
@@ -91,6 +104,125 @@ fn apply_gate_decisions() {
         ),
         ApplyGate::Allowed
     );
+    // ... but never the closed-PR check.
+    assert_eq!(
+        apply_gate(
+            &pr(false, "closed", Some(true), Some("clean")),
+            &apply_jobs(true)
+        ),
+        ApplyGate::Denied("pull request is closed".into())
+    );
+}
+
+#[test]
+fn apply_gate_without_mergeable_requirement() {
+    // `approved` alone no longer disables gating: mergeable is not checked,
+    // but the closed-PR check stays and `approved` is reported as required.
+    let jobs = apply_jobs_with(false, Some("[approved]"));
+    assert_eq!(
+        apply_gate(&pr(false, "open", Some(false), Some("dirty")), &jobs),
+        ApplyGate::Allowed
+    );
+    assert_eq!(
+        apply_gate(&pr(false, "closed", None, None), &jobs),
+        ApplyGate::Denied("pull request is closed".into())
+    );
+    let req = required_checks(&jobs);
+    assert!(req.contains("approved"));
+    assert!(!req.contains("mergeable"));
+}
+
+#[test]
+fn required_checks_collects_requirements() {
+    let req = required_checks(&apply_jobs_with(
+        false,
+        Some("[approved, mergeable, undiverged]"),
+    ));
+    assert_eq!(
+        req.into_iter().collect::<Vec<_>>(),
+        vec!["approved", "mergeable", "undiverged"]
+    );
+    // skip_merge_check removes only `mergeable`.
+    let req = required_checks(&apply_jobs_with(true, Some("[mergeable, undiverged]")));
+    assert_eq!(req.into_iter().collect::<Vec<_>>(), vec!["undiverged"]);
+    // Non-apply jobs contribute nothing.
+    let mut jobs = apply_jobs(false);
+    jobs[0].command = Command::Plan;
+    assert!(required_checks(&jobs).is_empty());
+}
+
+fn review(user: &str, state: &str) -> ReviewInfo {
+    ReviewInfo {
+        user: user.into(),
+        state: state.into(),
+    }
+}
+
+#[test]
+fn approved_requirement() {
+    // No reviews at all.
+    assert!(check_approved(&[], "author").is_err());
+    // Comments only.
+    assert!(check_approved(&[review("bob", "COMMENTED")], "author").is_err());
+    // One approval.
+    assert!(check_approved(&[review("bob", "APPROVED")], "author").is_ok());
+    // The author's own approval does not count.
+    assert!(check_approved(&[review("author", "APPROVED")], "author").is_err());
+    // Changes requested after an approval by the same reviewer block.
+    let err = check_approved(
+        &[
+            review("bob", "APPROVED"),
+            review("bob", "CHANGES_REQUESTED"),
+        ],
+        "author",
+    )
+    .unwrap_err();
+    assert!(err.contains("changes requested by @bob"), "{}", err);
+    // Approval after changes requested by the same reviewer resolves it.
+    assert!(check_approved(
+        &[
+            review("bob", "CHANGES_REQUESTED"),
+            review("bob", "APPROVED")
+        ],
+        "author"
+    )
+    .is_ok());
+    // Another reviewer's outstanding request blocks even with an approval.
+    assert!(check_approved(
+        &[
+            review("bob", "APPROVED"),
+            review("carol", "CHANGES_REQUESTED")
+        ],
+        "author"
+    )
+    .is_err());
+    // A dismissed approval no longer counts.
+    assert!(check_approved(
+        &[review("bob", "APPROVED"), review("bob", "DISMISSED")],
+        "author"
+    )
+    .is_err());
+    // A later comment does not revoke an approval.
+    assert!(check_approved(
+        &[review("bob", "APPROVED"), review("bob", "COMMENTED")],
+        "author"
+    )
+    .is_ok());
+}
+
+#[test]
+fn undiverged_requirement() {
+    assert!(check_undiverged(&CompareInfo {
+        ahead_by: 3,
+        behind_by: 0
+    })
+    .is_ok());
+    let err = check_undiverged(&CompareInfo {
+        ahead_by: 3,
+        behind_by: 2,
+    })
+    .unwrap_err();
+    assert!(err.contains("2 commit(s) behind"), "{}", err);
 }
 
 #[test]
