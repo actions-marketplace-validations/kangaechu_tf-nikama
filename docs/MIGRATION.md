@@ -203,6 +203,7 @@ What changed and why:
 | `drift-github-issues` | same | Unchanged. Issues are labelled `digger`. |
 | `github-token` | `github-token` | Unchanged. |
 | (none) | `max-parallel`, `log-level`, `version` | New. |
+| (none) | `config-ref`, `allow-run-steps` | New. Read `nikama.yml` from a trusted ref on PR runs / refuse `run:` steps (README "Trusting the configuration"). |
 
 ### Manual and drift workflows
 

@@ -175,6 +175,29 @@ is the one that counts.
 pull requests from forks a read-only token and no OIDC token, and branches in
 the repository itself can only be pushed by users with write access.
 
+### Trusting the configuration
+
+By default `nikama.yml` is read from the checkout, which on pull request runs
+is the pull request's own version. Two inputs tighten that:
+
+- `config-ref: default` reads the configuration from the repository's default
+  branch (or any other git ref) through the GitHub API, so a pull request runs
+  with the reviewed configuration: `run:` steps, workflows, `apply_requirements`
+  and `aws_role_to_assume` cannot be changed by the PR itself. Changes to
+  `nikama.yml` take effect once merged; a PR that adds a new project is
+  planned after it lands. `generate_projects` still discovers directories in
+  the checkout. The input only applies to pull request runs; manual and drift
+  runs read the checkout.
+- `allow-run-steps: false` refuses any configuration that contains a `run:`
+  step, from whichever source it was read.
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.2.0
+        with:
+          config-ref: default
+          allow-run-steps: "false"
+```
+
 ## Configuration file
 
 `nikama.yml` (or `nikama.yaml`). A `digger.yml` is still read as a fallback
@@ -200,6 +223,7 @@ The action sets these for you; when running the binary directly:
 | `REPORTING_STRATEGY` | `comments_per_run` / `latest_run_comment` / `per_project` |
 | `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`, `INPUT_DRIFT_GITHUB_ISSUES` | drift notifications |
 | `NIKAMA_CONFIG`, `NIKAMA_MAX_PARALLEL`, `NIKAMA_LOG_LEVEL` | CLI options |
+| `NIKAMA_CONFIG_REF`, `NIKAMA_ALLOW_RUN_STEPS` | trusted configuration (see "Trusting the configuration") |
 | `TF_PLUGIN_CACHE_DIR` | when set, `init` steps run one at a time |
 
 Validate a configuration locally:

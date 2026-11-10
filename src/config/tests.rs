@@ -490,3 +490,23 @@ fn impacted_hard_mode_adds_dependents_in_config_order() {
         vec!["app", "other"]
     );
 }
+
+#[test]
+fn run_steps_are_listed_and_can_be_forbidden() {
+    let c = load(
+        "projects:\n  - name: a\n    dir: a\n    workflow: w\nworkflows:\n  w:\n    plan:\n      steps:\n        - init\n        - plan\n        - run: echo hi\n    apply:\n      steps:\n        - run: echo pre\n        - init\n        - apply\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.run_steps(),
+        vec!["workflow 'w' plan.steps[2]", "workflow 'w' apply.steps[0]"]
+    );
+    assert!(c.check_run_steps(true).is_ok());
+    let msg = c.check_run_steps(false).unwrap_err().to_string();
+    assert!(msg.contains("allow-run-steps is false"), "{}", msg);
+    assert!(msg.contains("workflow 'w' plan.steps[2]"), "{}", msg);
+
+    let plain = load("projects:\n  - name: a\n    dir: a\n").unwrap();
+    assert!(plain.run_steps().is_empty());
+    assert!(plain.check_run_steps(false).is_ok());
+}

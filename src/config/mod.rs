@@ -5,11 +5,13 @@ mod generate;
 mod graph;
 mod impact;
 mod raw;
+mod remote;
 #[cfg(test)]
 mod tests;
 
 pub use graph::DependencyGraph;
 pub use impact::{impacted_projects, matches_patterns, normalize_path};
+pub use remote::load_from_ref;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +43,13 @@ pub enum ConfigError {
     Unsupported(Vec<String>),
     #[error("invalid configuration: {0}")]
     Validation(String),
+    #[error("could not read the configuration from GitHub: {0}")]
+    Remote(String),
+    #[error(
+        "run steps are not allowed (allow-run-steps is false) but the configuration has {}",
+        .0.join(", ")
+    )]
+    RunStepsForbidden(Vec<String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +324,31 @@ impl Config {
         self.workflows
             .get(&project.workflow)
             .expect("validated: workflow exists")
+    }
+
+    /// Locations of every `run:` step, as `workflow 'x' plan.steps[i]`.
+    pub fn run_steps(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for (name, wf) in &self.workflows {
+            for (stage, s) in [("plan", &wf.plan), ("apply", &wf.apply)] {
+                for (i, step) in s.steps.iter().enumerate() {
+                    if matches!(step, Step::Run { .. }) {
+                        out.push(format!("workflow '{}' {}.steps[{}]", name, stage, i));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Error when the configuration has `run:` steps and they are not allowed.
+    pub fn check_run_steps(&self, allowed: bool) -> Result<(), ConfigError> {
+        let steps = self.run_steps();
+        if allowed || steps.is_empty() {
+            Ok(())
+        } else {
+            Err(ConfigError::RunStepsForbidden(steps))
+        }
     }
 }
 

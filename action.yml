@@ -23,6 +23,14 @@ inputs:
     description: "Alternative configuration file path (default: nikama.yml)"
     required: false
     default: ""
+  config-ref:
+    description: "PR runs only: read the configuration file from this git ref through the GitHub API instead of the checkout (`default` = the repository's default branch), so the pull request cannot change it"
+    required: false
+    default: ""
+  allow-run-steps:
+    description: "Set to `false` to refuse configurations that contain `run:` steps"
+    required: false
+    default: "true"
   max-parallel:
     description: "Maximum number of concurrent plans (overrides nikama.yml)"
     required: false
@@ -147,6 +155,8 @@ runs:
         INPUT_DIGGER_PROJECT: ${{ inputs.project }}
         INPUT_DIGGER_BLOCK_FILTERS: ${{ inputs.block-filters }}
         NIKAMA_CONFIG: ${{ inputs.config-file }}
+        NIKAMA_CONFIG_REF: ${{ inputs.config-ref }}
+        NIKAMA_ALLOW_RUN_STEPS: ${{ inputs.allow-run-steps }}
         NIKAMA_MAX_PARALLEL: ${{ inputs.max-parallel }}
         NIKAMA_LOG_LEVEL: ${{ inputs.log-level }}
         LOCK_PROVIDER: ${{ inputs.lock-provider }}
