@@ -1,0 +1,44 @@
+name: Close external pull requests
+
+# tf-nikama accepts bug reports and feature requests from everyone as GitHub
+# Issues, but pull requests only from repository collaborators (see
+# CONTRIBUTING.md). GitHub has no setting to disable pull requests, so this
+# workflow closes PRs opened by anyone else with a pointer to the issue tracker.
+#
+# `pull_request_target` runs with the base repository's token so it can comment
+# and close PRs from forks. It never checks out or runs PR code, so the
+# zizmor dangerous-triggers finding does not apply here.
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers]
+    types: [opened, reopened]
+
+permissions: {}
+
+jobs:
+  close:
+    if: >-
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+      && github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR_URL: ${{ github.event.pull_request.html_url }}
+      ISSUES_URL: ${{ github.event.repository.html_url }}/issues/new
+    steps:
+      - name: Comment and close
+        run: |
+          gh pr comment "$PR_URL" --body "$(cat <<EOF
+          Thanks for your interest in tf-nikama!
+
+          This repository accepts **Issues only** from outside the maintainer team; pull requests from external contributors are closed automatically. Please open an issue instead and describe the bug or the change you have in mind:
+
+          $ISSUES_URL
+
+          If a maintainer agrees with the proposal, they will implement it (and credit you in the commit or release notes). See CONTRIBUTING.md for details.
+          EOF
+          )"
+          gh pr close "$PR_URL"
