@@ -258,6 +258,7 @@ These change what you see, not what you configure.
 | `digger help` | exits 7 when there are impacted projects | posts help, exits 0 |
 | Comment on a plain issue | API error | ignored, exits 0 |
 | Comment command from a user without write access | runs | refused with a comment, exits 0 (see README "Who can run commands") |
+| `approved` requirement | any user's review counts | only reviews from users with write access count, as with branch protection |
 | `ready_for_review` | ignored | runs `on_pull_request_pushed` |
 | Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see README "How a run works") |
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |

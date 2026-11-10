@@ -19,8 +19,9 @@ projects:
     # enforced independently:
     #   mergeable  - GitHub reports the PR as mergeable (no conflicts, required
     #                checks green); skipped by workflow_configuration.skip_merge_check
-    #   approved   - at least one approving review from someone other than the
-    #                PR author, and no outstanding "changes requested"
+    #   approved   - at least one approving review from a user with write
+    #                access other than the PR author, and no outstanding
+    #                "changes requested" (reviews from other users are ignored)
     #   undiverged - the PR branch is not behind its base branch
     apply_requirements: [approved, mergeable, undiverged]
     aws_role_to_assume:

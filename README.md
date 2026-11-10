@@ -155,8 +155,10 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    protection reports it as *blocked*, the required reviews must be in
    place and every required check run or status other than nikama's own
    must have passed, so that a required `digger/apply` check does not block
-   itself), `approved` (at least one approving review from someone other
-   than the author and no outstanding "changes requested"), `undiverged`
+   itself), `approved` (at least one approving review from a user with
+   write access other than the author and no outstanding "changes
+   requested"; reviews from other users are ignored, as branch protection
+   ignores them), `undiverged`
    (the branch is not behind its base). The default is `[mergeable]`; a
    closed, unmerged PR is always rejected.
 6. Plans run in parallel (`concurrency.max_parallel`); applies run level by
