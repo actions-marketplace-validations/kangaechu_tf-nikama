@@ -35,6 +35,10 @@ Not supported (and rejected at config load): Terragrunt, Pulumi, GCP/Azure
 lock or plan storage, GitHub Artifacts plan storage, OPA policies, Digger
 backend features.
 
+There are currently no plans to support anything beyond Terraform / OpenTofu
+with AWS. Other IaC tools and cloud providers are out of scope for the
+foreseeable future.
+
 ## Quick start
 
 `.github/workflows/nikama.yml`:
@@ -148,6 +152,13 @@ nikama --validate --local
 `0` ok / nothing to do, `1` configuration error, `2` lock provider error,
 `3` context parse error, `4` initialisation error, `6` event error,
 `7` command error, `8` at least one job failed, `10` not in GitHub Actions.
+
+## Contributing
+
+Bug reports and feature requests are welcome as
+[GitHub Issues](https://github.com/kangaechu/tf-nikama/issues/new). Pull
+requests are accepted from repository collaborators only; PRs from other
+accounts are closed automatically. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Acknowledgements
 
