@@ -126,6 +126,10 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         auto_merge_strategy,
         pr_locks: raw.pr_locks.unwrap_or(true),
         allow_draft_prs: raw.allow_draft_prs.unwrap_or(false),
+        no_lock_label: raw
+            .no_lock_label
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty()),
         drift_include_patterns,
         drift_exclude_patterns,
         concurrency,

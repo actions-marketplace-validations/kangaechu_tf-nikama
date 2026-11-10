@@ -28,7 +28,7 @@ Supported in the first release:
 - **AWS**: DynamoDB PR locks (schema-compatible with Digger), S3 plan storage,
   GitHub OIDC → STS role assumption, Cognito Identity
 - **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
-- Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project` and `-d/--directory`; on a closed or merged PR only `unlock` is accepted
+- Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project`, `-d/--directory` and `plan --no-lock`; on a closed or merged PR only `unlock` is accepted
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
 - Drift detection with Slack webhook or GitHub Issue notifications
 
@@ -142,6 +142,14 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    and only projects this PR already holds still run. On close / merge and
    on a bare `digger unlock`, every lock the PR still holds is released, not
    only those of the currently impacted projects.
+   A plan can skip locking altogether: `digger plan --no-lock` on a comment,
+   or a pull request carrying the label named in `no_lock_label` (set it to
+   the label your Renovate / Dependabot configuration adds). Such a plan runs
+   even for projects held by another PR and releases any lock this PR holds
+   for the planned projects, so a pull request that only needs a look at its
+   plan, for example a Terraform or provider version bump across every
+   directory, blocks nobody. `digger apply` takes the locks as usual; a
+   stored plan is still bound to the commit it was produced from.
 5. Before an apply, each project's `apply_requirements` are checked against
    the PR: `mergeable` (GitHub reports the PR as mergeable; when branch
    protection reports it as *blocked*, the required reviews must be in
@@ -259,7 +267,7 @@ with a warning. Unknown keys and keys for unsupported features are errors.
 
 Top-level keys: `projects`, `workflows`, `generate_projects`,
 `dependency_configuration`, `traverse_to_nested_projects`, `auto_merge`,
-`auto_merge_strategy`, `pr_locks`, `allow_draft_prs`,
+`auto_merge_strategy`, `pr_locks`, `allow_draft_prs`, `no_lock_label`,
 `drift_include_patterns`, `drift_exclude_patterns`, `concurrency`, `comment`
 (plus `git_timeout` and `telemetry`, accepted for compatibility).
 

@@ -308,6 +308,9 @@ pub struct Config {
     pub auto_merge_strategy: MergeStrategy,
     pub pr_locks: bool,
     pub allow_draft_prs: bool,
+    /// Pull requests carrying this label are planned without taking project
+    /// locks (`None`: no label does that).
+    pub no_lock_label: Option<String>,
     pub drift_include_patterns: Vec<String>,
     pub drift_exclude_patterns: Vec<String>,
     pub concurrency: Concurrency,

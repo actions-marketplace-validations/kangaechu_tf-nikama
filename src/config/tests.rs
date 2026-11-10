@@ -34,6 +34,7 @@ fn defaults_are_applied() {
         vec!["digger unlock"]
     );
     assert!(c.pr_locks);
+    assert_eq!(c.no_lock_label, None);
     assert!(!c.auto_merge);
     assert_eq!(c.auto_merge_strategy, MergeStrategy::Squash);
     assert_eq!(c.dependency_mode, DependencyMode::Hard);
@@ -533,4 +534,21 @@ fn allowed_providers_are_normalised_and_validated() {
         .unwrap()
         .allowed_providers
         .is_empty());
+}
+
+#[test]
+fn no_lock_label_is_trimmed_and_optional() {
+    let dir = tempfile::tempdir().unwrap();
+    let c = load_from_str(
+        "projects:\n  - name: a\n    dir: a\nno_lock_label: '  no-lock '\n",
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(c.no_lock_label.as_deref(), Some("no-lock"));
+    let c = load_from_str(
+        "projects:\n  - name: a\n    dir: a\nno_lock_label: ''\n",
+        dir.path(),
+    )
+    .unwrap();
+    assert_eq!(c.no_lock_label, None);
 }
