@@ -2,11 +2,13 @@
 
 mod dynamodb;
 mod gcs;
+mod s3;
 #[cfg(test)]
 mod tests;
 
 pub use dynamodb::DynamoDbLock;
 pub use gcs::GcsLock;
+pub use s3::S3Lock;
 
 use crate::github::GithubClient;
 use async_trait::async_trait;
@@ -51,7 +53,8 @@ impl Lock for NoopLock {
 }
 
 /// Create the lock backend from the environment (`LOCK_PROVIDER`,
-/// `DISABLE_LOCKING`, `NIKAMA_LOCK_TABLE`, `GOOGLE_STORAGE_LOCK_BUCKET`).
+/// `DISABLE_LOCKING`, `NIKAMA_LOCK_TABLE`, `AWS_S3_LOCK_BUCKET`,
+/// `GOOGLE_STORAGE_LOCK_BUCKET`).
 pub async fn from_env(enabled: bool) -> anyhow::Result<Arc<dyn Lock>> {
     if !enabled || crate::util::env_is_true("DISABLE_LOCKING") {
         return Ok(Arc::new(NoopLock));
@@ -65,6 +68,12 @@ pub async fn from_env(enabled: bool) -> anyhow::Result<Arc<dyn Lock>> {
                 .unwrap_or_else(|| dynamodb::DEFAULT_TABLE.to_string());
             Ok(Arc::new(DynamoDbLock::new(&table).await?))
         }
+        "s3" => {
+            let bucket = crate::util::env_opt("AWS_S3_LOCK_BUCKET").ok_or_else(|| {
+                anyhow::anyhow!("AWS_S3_LOCK_BUCKET is required when LOCK_PROVIDER=s3")
+            })?;
+            Ok(Arc::new(S3Lock::new(bucket.trim()).await?))
+        }
         "noop" | "none" => Ok(Arc::new(NoopLock)),
         "gcp" | "gcs" => {
             let bucket = crate::util::env_opt("GOOGLE_STORAGE_LOCK_BUCKET")
@@ -76,7 +85,7 @@ pub async fn from_env(enabled: bool) -> anyhow::Result<Arc<dyn Lock>> {
             Ok(Arc::new(GcsLock::new(client, &bucket)))
         }
         "azure" => anyhow::bail!(
-            "LOCK_PROVIDER={} is not supported by this tool (only aws, gcp or noop)",
+            "LOCK_PROVIDER={} is not supported by this tool (only aws, s3, gcp or noop)",
             provider
         ),
         other => anyhow::bail!("unknown LOCK_PROVIDER '{}'", other),
