@@ -121,6 +121,23 @@ impl GithubClient {
     }
 
     async fn request(&self, method: Method, path: &str, body: Option<Value>) -> Result<Value> {
+        let text = self
+            .request_text(method, path, body, "application/vnd.github+json")
+            .await?;
+        if text.trim().is_empty() {
+            return Ok(Value::Null);
+        }
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    /// Send a request and return the response body as text (empty for 204).
+    async fn request_text(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<Value>,
+        accept: &str,
+    ) -> Result<String> {
         let url = format!("{}{}", self.api_base, path);
         let mut attempt = 0u32;
         loop {
@@ -129,7 +146,7 @@ impl GithubClient {
                 .http
                 .request(method.clone(), &url)
                 .bearer_auth(&self.token)
-                .header("Accept", "application/vnd.github+json")
+                .header("Accept", accept)
                 .header("X-GitHub-Api-Version", "2022-11-28");
             if let Some(b) = &body {
                 req = req.json(b);
@@ -146,13 +163,9 @@ impl GithubClient {
             let status = resp.status();
             if status.is_success() {
                 if status == StatusCode::NO_CONTENT {
-                    return Ok(Value::Null);
+                    return Ok(String::new());
                 }
-                let text = resp.text().await?;
-                if text.trim().is_empty() {
-                    return Ok(Value::Null);
-                }
-                return Ok(serde_json::from_str(&text)?);
+                return Ok(resp.text().await?);
             }
             let retry_after = resp
                 .headers()
@@ -225,6 +238,43 @@ impl GithubClient {
             mergeable_state: v["mergeable_state"].as_str().map(|s| s.to_string()),
             author: v["user"]["login"].as_str().unwrap_or_default().to_string(),
         })
+    }
+
+    /// Default branch of the repository (`GET /repos/{owner}/{repo}`).
+    pub async fn default_branch(&self) -> Result<String> {
+        let v = self.request(Method::GET, &self.repo_path(""), None).await?;
+        Ok(v["default_branch"].as_str().unwrap_or("main").to_string())
+    }
+
+    /// Raw contents of the file at `path` on `git_ref`
+    /// (`GET /contents/{path}?ref=`). `None` when the file does not exist.
+    pub async fn get_file(&self, path: &str, git_ref: &str) -> Result<Option<String>> {
+        let encoded: Vec<String> = path
+            .split('/')
+            .filter(|s| !s.is_empty())
+            .map(|s| urlencoding::encode(s).into_owned())
+            .collect();
+        let api_path = self.repo_path(&format!(
+            "/contents/{}?ref={}",
+            encoded.join("/"),
+            urlencoding::encode(git_ref)
+        ));
+        match self
+            .request_text(
+                Method::GET,
+                &api_path,
+                None,
+                "application/vnd.github.raw+json",
+            )
+            .await
+        {
+            Ok(text) => Ok(Some(text)),
+            Err(GithubError::Status {
+                status: StatusCode::NOT_FOUND,
+                ..
+            }) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Repository role of `login`: `admin`, `maintain`, `write`, `triage`,

@@ -277,3 +277,32 @@ async fn collaborator_role_prefers_role_name_and_maps_404_to_none() {
     assert_eq!(c.collaborator_role("bob").await.unwrap(), "read");
     assert_eq!(c.collaborator_role("nobody").await.unwrap(), "none");
 }
+
+#[tokio::test]
+async fn get_file_returns_raw_text_or_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/contents/dir/nikama.yml"))
+        .and(query_param("ref", "release/1.0"))
+        .and(header("accept", "application/vnd.github.raw+json"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("projects: []\n"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/contents/missing.yml"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{\"message\":\"Not Found\"}"))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"default_branch": "trunk"})))
+        .mount(&server)
+        .await;
+    let c = client(&server).await;
+    assert_eq!(
+        c.get_file("dir/nikama.yml", "release/1.0").await.unwrap(),
+        Some("projects: []\n".to_string())
+    );
+    assert_eq!(c.get_file("missing.yml", "main").await.unwrap(), None);
+    assert_eq!(c.default_branch().await.unwrap(), "trunk");
+}

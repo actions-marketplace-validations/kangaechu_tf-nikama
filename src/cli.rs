@@ -98,30 +98,76 @@ pub async fn run() -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    // Configuration.
-    let loaded = match config::load(&repo_root, args.config.as_deref()) {
-        Ok(l) => l,
-        Err(e) => {
-            // Legacy env var for an explicit file name.
-            if args.config.is_none() {
-                if let Some(legacy) = crate::util::env_opt("DIGGER_FILENAME") {
-                    match config::load(&repo_root, Some(std::path::Path::new(&legacy))) {
-                        Ok(l) => l,
-                        Err(e2) => {
-                            tracing::error!(error = %e2, "configuration error");
-                            return exit::CONFIG;
-                        }
-                    }
-                } else {
+    let mode = crate::util::env_first(&["INPUT_DIGGER_MODE", "NIKAMA_MODE"])
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let pr_mode = matches!(mode.as_str(), "" | "pr" | "event");
+
+    // GitHub identity.
+    let token =
+        crate::util::env_first(&["DIGGER_GITHUB_TOKEN", "NIKAMA_GITHUB_TOKEN", "GITHUB_TOKEN"]);
+    let repository = crate::util::env_opt("GITHUB_REPOSITORY");
+    let actor = crate::util::env_opt("GITHUB_ACTOR").unwrap_or_else(|| "unknown".to_string());
+
+    // Configuration: from a trusted git ref in PR mode when `config-ref` is
+    // set (so the pull request cannot change what it is run with), otherwise
+    // from the working tree.
+    let config_ref = crate::util::env_opt("NIKAMA_CONFIG_REF");
+    let loaded = match (&config_ref, pr_mode && !args.validate && !args.local) {
+        (Some(wanted), true) => {
+            let (Some(token), Some(repository)) = (&token, &repository) else {
+                tracing::error!("GITHUB_TOKEN and GITHUB_REPOSITORY are required for config-ref");
+                return exit::CONFIG;
+            };
+            let Some((owner, repo)) = crate::util::split_repo(repository) else {
+                tracing::error!(%repository, "GITHUB_REPOSITORY must be owner/repo");
+                return exit::CONFIG;
+            };
+            let github = GithubClient::new(token, owner, repo, github_api_base().as_deref());
+            let git_ref = match resolve_config_ref(wanted, &github).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(error = %e, "could not resolve config-ref");
+                    return exit::CONFIG;
+                }
+            };
+            tracing::info!(%git_ref, "reading the configuration from GitHub (config-ref)");
+            match config::load_from_ref(
+                &github,
+                &git_ref,
+                explicit_config_path(&args).as_deref(),
+                &repo_root,
+            )
+            .await
+            {
+                Ok(l) => l,
+                Err(e) => {
                     tracing::error!(error = %e, "configuration error");
                     return exit::CONFIG;
                 }
-            } else {
-                tracing::error!(error = %e, "configuration error");
-                return exit::CONFIG;
             }
         }
+        (Some(_), false) => {
+            tracing::info!("config-ref only applies to pull request runs; reading the configuration from the working tree");
+            match load_local_config(&args, &repo_root) {
+                Ok(l) => l,
+                Err(code) => return code,
+            }
+        }
+        (None, _) => match load_local_config(&args, &repo_root) {
+            Ok(l) => l,
+            Err(code) => return code,
+        },
     };
+    // `run:` steps execute arbitrary commands from the configuration; let the
+    // workflow forbid them when the configuration is not trusted.
+    let allow_run_steps = crate::util::env_opt("NIKAMA_ALLOW_RUN_STEPS")
+        .map(|v| !v.trim().eq_ignore_ascii_case("false"))
+        .unwrap_or(true);
+    if let Err(e) = loaded.config.check_run_steps(allow_run_steps) {
+        tracing::error!(error = %e, path = %loaded.path.display(), "configuration error");
+        return exit::CONFIG;
+    }
     if loaded.legacy_name {
         tracing::warn!(
             path = %loaded.path.display(),
@@ -173,16 +219,6 @@ pub async fn run() -> i32 {
         serialize_init,
     };
 
-    let mode = crate::util::env_first(&["INPUT_DIGGER_MODE", "NIKAMA_MODE"])
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-
-    // GitHub identity.
-    let token =
-        crate::util::env_first(&["DIGGER_GITHUB_TOKEN", "NIKAMA_GITHUB_TOKEN", "GITHUB_TOKEN"]);
-    let repository = crate::util::env_opt("GITHUB_REPOSITORY");
-    let actor = crate::util::env_opt("GITHUB_ACTOR").unwrap_or_else(|| "unknown".to_string());
-
     match mode.as_str() {
         "manual" => {
             let namespace = repository
@@ -232,6 +268,61 @@ pub async fn run() -> i32 {
             );
             exit::CONFIG
         }
+    }
+}
+
+/// `--config` / `NIKAMA_CONFIG`, falling back to Digger's `DIGGER_FILENAME`.
+fn explicit_config_path(args: &Args) -> Option<PathBuf> {
+    args.config
+        .clone()
+        .or_else(|| crate::util::env_opt("DIGGER_FILENAME").map(PathBuf::from))
+}
+
+/// Load the configuration from the working tree. Errors are logged and
+/// returned as the exit code.
+fn load_local_config(args: &Args, repo_root: &std::path::Path) -> Result<config::Loaded, i32> {
+    match config::load(repo_root, args.config.as_deref()) {
+        Ok(l) => Ok(l),
+        Err(e) => {
+            // Legacy env var for an explicit file name.
+            let legacy = if args.config.is_none() {
+                crate::util::env_opt("DIGGER_FILENAME")
+            } else {
+                None
+            };
+            match legacy {
+                Some(legacy) => config::load(repo_root, Some(std::path::Path::new(&legacy)))
+                    .map_err(|e2| {
+                        tracing::error!(error = %e2, "configuration error");
+                        exit::CONFIG
+                    }),
+                None => {
+                    tracing::error!(error = %e, "configuration error");
+                    Err(exit::CONFIG)
+                }
+            }
+        }
+    }
+}
+
+/// `config-ref` value → git ref. `default` means the repository's default
+/// branch, taken from the event payload when present, otherwise from the API.
+async fn resolve_config_ref(wanted: &str, github: &GithubClient) -> anyhow::Result<String> {
+    let wanted = wanted.trim();
+    if !wanted.eq_ignore_ascii_case("default") {
+        return Ok(wanted.to_string());
+    }
+    let from_event = crate::util::env_opt("GITHUB_CONTEXT")
+        .and_then(|json| GithubContext::parse(&json).ok())
+        .and_then(|ctx| {
+            ctx.event["repository"]["default_branch"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+        });
+    match from_event {
+        Some(b) => Ok(b),
+        None => Ok(github.default_branch().await?),
     }
 }
 
