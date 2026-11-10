@@ -2,7 +2,7 @@
 
 This guide is for repositories that run Digger with `no-backend: true` and
 want to switch to tf-nikama. If you use the Digger backend / orchestrator,
-Terragrunt, Pulumi, GCP or Azure, tf-nikama is not a drop-in replacement; see
+Terragrunt, Pulumi or Azure, tf-nikama is not a drop-in replacement; see
 [What is not supported](#what-is-not-supported) first.
 
 The short version:
@@ -10,8 +10,9 @@ The short version:
 1. Rename `digger.yml` to `nikama.yml` and remove unsupported keys.
 2. Replace the `diggerhq/digger` step in your workflow with a Terraform setup
    step plus `kangaechu/tf-nikama`.
-3. Keep your DynamoDB lock table, S3 plan bucket, branch protection rules and
-   PR comment habits. They all carry over unchanged.
+3. Keep your DynamoDB lock table, S3 plan bucket (or the Cloud Storage
+   buckets on GCP), branch protection rules and PR comment habits. They all
+   carry over unchanged.
 
 ## Compatibility at a glance
 
@@ -20,6 +21,7 @@ The short version:
 | `digger.yml` keys and defaults | Yes | Same schema. Unsupported keys are rejected at load time instead of being ignored. |
 | DynamoDB lock table | Yes | Same table name (`DiggerDynamoDBLockTable`), same key schema. Locks held by open PRs stay valid. |
 | S3 plan storage | Yes | Same bucket variables and the same object key format `<owner>-<repo>-<pr>-<project>.tfplan`. |
+| GCS locks and plan storage | Yes | Same `GOOGLE_STORAGE_LOCK_BUCKET` / `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` variables, same object names and the same `LockId` metadata key. Lock objects are now created with a precondition, so two runs can no longer both acquire a lock. |
 | PR comment commands | Yes | `digger plan|apply|lock|unlock|help` keep working. `nikama ...` is accepted as well. |
 | Commit status contexts | Yes | Still `digger/plan` and `digger/apply`, so branch protection rules need no change. |
 | Environment variables | Yes | `INPUT_DIGGER_*`, `LOCK_PROVIDER`, `PLAN_UPLOAD_*`, `REPORTING_STRATEGY`, `DIGGER_FILENAME`, `DIGGER_GITHUB_TOKEN` are read as before. |
@@ -156,10 +158,13 @@ What changed and why:
 - **Checkout of the PR head on comments is explicit.** Digger did this behind
   `configure-checkout: true`. tf-nikama relies on the `ref:` expression on
   `actions/checkout` shown above.
-- **AWS credentials come from your workflow.** Digger's `setup-aws`,
+- **Cloud credentials come from your workflow.** Digger's `setup-aws`,
   `aws-role-to-assume`, `aws-access-key-id` and friends are gone. Keep using
   `aws-actions/configure-aws-credentials`. Per-project `aws_role_to_assume`
   and `aws_cognito_oidc` in `nikama.yml` still work.
+  On Google Cloud, replace `setup-google-cloud` and the `google-*` auth inputs
+  with `google-github-actions/auth`; tf-nikama reads the credentials it writes
+  (`GOOGLE_APPLICATION_CREDENTIALS`) for the lock and plan buckets.
 - **`GITHUB_CONTEXT` and `GITHUB_TOKEN` are set by the action.** You no longer
   need the `env:` block. Pass a different token with the `github-token` input.
 - **`no-backend: true` is gone.** There is no backend mode to turn off.
@@ -179,15 +184,18 @@ What changed and why:
 | `no-backend` | (none) | Always backendless. |
 | `setup-terraform`, `terraform-version`, `setup-opentofu`, `opentofu-version`, `setup-tfenv` | (none) | Use a setup action. |
 | `setup-aws`, `aws-*` | (none) | Use `aws-actions/configure-aws-credentials`. |
-| `setup-google-cloud`, `setup-azure`, `google-lock-bucket`, `upload-plan-destination-gcp-*`, `upload-plan-destination-azure-*` | (none) | GCP / Azure not supported. |
+| `setup-google-cloud`, `google-auth-credentials`, `google-workload-identity-provider*`, `google-service-account` | (none) | Use `google-github-actions/auth`. |
+| `google-lock-bucket`, `upload-plan-destination-gcp-bucket` | same names | Unchanged. Set `lock-provider: gcp` for the lock bucket. |
+| `setup-azure`, `upload-plan-destination-azure-*` | (none) | Azure not supported. |
 | `setup-terragrunt`, `terragrunt-version`, `setup-checkov`, `checkov-version` | (none) | Not supported. |
 | `configure-checkout` | (none) | Set `ref:` on `actions/checkout`. |
 | `cache-dependencies` | (none) | Set `TF_PLUGIN_CACHE_DIR` yourself. |
 | `digger-filename` | `config-file` | `DIGGER_FILENAME` env is also still honoured. |
 | `digger-token`, `digger-hostname`, `digger-organisation`, `digger-spec` | (none) | Backend only; ignored if set in `env`. |
 | `disable-locking` | `lock-provider: noop` | `DISABLE_LOCKING=true` env also works. |
+| (none) | `lock-provider` | New. `aws` (default), `gcp` or `noop`. Digger picked `gcp` when `google-lock-bucket` was set. |
 | (none) | `lock-table` | New. Defaults to `DiggerDynamoDBLockTable`. |
-| `upload-plan-destination` | `upload-plan-destination` | Only `aws` or empty. `github` is not supported. |
+| `upload-plan-destination` | `upload-plan-destination` | `aws`, `gcp` or empty. `github` and `azure` are not supported. |
 | `upload-plan-destination-s3-*` | same names | Unchanged. |
 | `reporting-strategy` | `reporting-strategy` | Same values. `comments_per_run` now means one comment per run, edited in place. |
 | `mode`, `command`, `project` | `mode`, `command`, `project` | Unchanged (manual and drift modes). |
@@ -254,12 +262,12 @@ These change what you see, not what you configure.
 
 ## What is not supported
 
-tf-nikama targets Terraform / OpenTofu on AWS. These Digger features are out
-of scope and rejected at startup or config load:
+tf-nikama targets Terraform / OpenTofu on AWS and Google Cloud. These Digger
+features are out of scope and rejected at startup or config load:
 
 - Digger backend / orchestrator (`DIGGER_TOKEN`, `DIGGER_HOSTNAME`, run specs)
 - Terragrunt (including `generate_projects` with `terragrunt: true`) and Pulumi
-- GCP and Azure locks and plan storage
+- Azure locks and plan storage
 - Plan storage in GitHub Artifacts (`upload-plan-destination: github`)
 - OPA / rego policies and Checkov
 - GitLab, Bitbucket, Azure DevOps, GitHub Enterprise Server

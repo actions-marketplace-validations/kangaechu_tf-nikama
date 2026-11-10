@@ -1,10 +1,12 @@
 //! PR-level project locks.
 
 mod dynamodb;
+mod gcs;
 #[cfg(test)]
 mod tests;
 
 pub use dynamodb::DynamoDbLock;
+pub use gcs::GcsLock;
 
 use crate::github::GithubClient;
 use async_trait::async_trait;
@@ -43,7 +45,7 @@ impl Lock for NoopLock {
 }
 
 /// Create the lock backend from the environment (`LOCK_PROVIDER`,
-/// `DISABLE_LOCKING`, `NIKAMA_LOCK_TABLE`).
+/// `DISABLE_LOCKING`, `NIKAMA_LOCK_TABLE`, `GOOGLE_STORAGE_LOCK_BUCKET`).
 pub async fn from_env(enabled: bool) -> anyhow::Result<Arc<dyn Lock>> {
     if !enabled || crate::util::env_is_true("DISABLE_LOCKING") {
         return Ok(Arc::new(NoopLock));
@@ -58,8 +60,17 @@ pub async fn from_env(enabled: bool) -> anyhow::Result<Arc<dyn Lock>> {
             Ok(Arc::new(DynamoDbLock::new(&table).await?))
         }
         "noop" | "none" => Ok(Arc::new(NoopLock)),
-        "gcp" | "azure" => anyhow::bail!(
-            "LOCK_PROVIDER={} is not supported by this tool (only aws/noop)",
+        "gcp" | "gcs" => {
+            let bucket = crate::util::env_opt("GOOGLE_STORAGE_LOCK_BUCKET")
+                .map(|b| b.trim().to_ascii_lowercase())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("GOOGLE_STORAGE_LOCK_BUCKET is required when LOCK_PROVIDER=gcp")
+                })?;
+            let client = crate::gcs::GcsClient::from_env()?;
+            Ok(Arc::new(GcsLock::new(client, &bucket)))
+        }
+        "azure" => anyhow::bail!(
+            "LOCK_PROVIDER={} is not supported by this tool (only aws, gcp or noop)",
             provider
         ),
         other => anyhow::bail!("unknown LOCK_PROVIDER '{}'", other),

@@ -27,17 +27,18 @@ Supported in the first release:
 - **Terraform** and **OpenTofu**
 - **AWS**: DynamoDB PR locks (schema-compatible with Digger), S3 plan storage,
   GitHub OIDC → STS role assumption, Cognito Identity
+- **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
 - Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project` and `-d/--directory`
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
 - Drift detection with Slack webhook or GitHub Issue notifications
 
-Not supported (and rejected at config load): Terragrunt, Pulumi, GCP/Azure
+Not supported (and rejected at config load): Terragrunt, Pulumi, Azure
 lock or plan storage, GitHub Artifacts plan storage, OPA policies, Digger
 backend features.
 
 There are currently no plans to support anything beyond Terraform / OpenTofu
-with AWS. Other IaC tools and cloud providers are out of scope for the
-foreseeable future.
+with AWS or Google Cloud. Other IaC tools and cloud providers are out of
+scope for the foreseeable future.
 
 ## Quick start
 
@@ -79,6 +80,23 @@ jobs:
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+On Google Cloud, replace the AWS credentials step with
+`google-github-actions/auth` and point the action at Cloud Storage buckets
+(the service account needs `roles/storage.objectUser` on both):
+
+```yaml
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
+          service_account: nikama@my-project.iam.gserviceaccount.com
+      - uses: kangaechu/tf-nikama@v0.1.3
+        with:
+          lock-provider: gcp
+          google-lock-bucket: my-lock-bucket
+          upload-plan-destination: gcp
+          upload-plan-destination-gcp-bucket: my-plan-bucket
 ```
 
 `nikama.yml` at the repository root:
@@ -146,8 +164,8 @@ The action sets these for you; when running the binary directly:
 | `GITHUB_TOKEN`, `GITHUB_CONTEXT`, `GITHUB_REPOSITORY` | required for PR mode |
 | `INPUT_DIGGER_MODE` | `` / `manual` / `drift-detection` |
 | `INPUT_DIGGER_COMMAND`, `INPUT_DIGGER_PROJECT` | manual mode |
-| `LOCK_PROVIDER` (`aws`/`noop`), `NIKAMA_LOCK_TABLE`, `DISABLE_LOCKING` | PR locks |
-| `PLAN_UPLOAD_DESTINATION` (`aws`), `AWS_S3_BUCKET`, `PLAN_UPLOAD_S3_*` | plan storage |
+| `LOCK_PROVIDER` (`aws`/`gcp`/`noop`), `NIKAMA_LOCK_TABLE`, `GOOGLE_STORAGE_LOCK_BUCKET`, `DISABLE_LOCKING` | PR locks |
+| `PLAN_UPLOAD_DESTINATION` (`aws`/`gcp`), `AWS_S3_BUCKET`, `PLAN_UPLOAD_S3_*`, `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` | plan storage |
 | `REPORTING_STRATEGY` | `comments_per_run` / `latest_run_comment` / `per_project` |
 | `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`, `INPUT_DRIFT_GITHUB_ISSUES` | drift notifications |
 | `NIKAMA_CONFIG`, `NIKAMA_MAX_PARALLEL`, `NIKAMA_LOG_LEVEL` | CLI options |
@@ -176,8 +194,9 @@ accounts are closed automatically. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 tf-nikama is an independent re-implementation of the backendless mode of
 [Digger](https://github.com/diggerhq/digger) by Digger HQ, licensed under
-Apache-2.0. Configuration keys, comment commands, the DynamoDB lock schema and
-the S3 plan key format are kept compatible so existing setups can migrate.
+Apache-2.0. Configuration keys, comment commands, the DynamoDB and Cloud Storage lock
+schemas and the plan object key format are kept compatible so existing setups
+can migrate.
 
 ## License
 
