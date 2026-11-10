@@ -20,8 +20,8 @@ The short version:
 |---|---|---|
 | `digger.yml` keys and defaults | Yes | Same schema. Unsupported keys are rejected at load time instead of being ignored. |
 | DynamoDB lock table | Yes | Same table name (`DiggerDynamoDBLockTable`), same key schema. Locks held by open PRs stay valid. |
-| S3 plan storage | Yes | Same bucket variables and the same object key format `<owner>-<repo>-<pr>-<project>.tfplan`. |
-| GCS locks and plan storage | Yes | Same `GOOGLE_STORAGE_LOCK_BUCKET` / `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` variables, same object names and the same `LockId` metadata key. Lock objects are now created with a precondition, so two runs can no longer both acquire a lock. |
+| S3 plan storage | Yes | Same bucket variables and the same object key format `<owner>-<repo>-<pr>-<project>.tfplan`. nikama additionally records the PR head commit in the object metadata (`x-amz-meta-head-sha`) and refuses to apply a plan from another commit; plans written by Digger have no metadata and are applied with a warning. |
+| GCS locks and plan storage | Yes | Same `GOOGLE_STORAGE_LOCK_BUCKET` / `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` variables, same object names and the same `LockId` metadata key. Lock objects are now created with a precondition, so two runs can no longer both acquire a lock. Plan objects get a `head-sha` metadata entry with the same commit check as on S3. |
 | PR comment commands | Yes | `digger plan|apply|lock|unlock|help` keep working. `nikama ...` is accepted as well. |
 | Commit status contexts | Yes | Still `digger/plan` and `digger/apply`, so branch protection rules need no change. |
 | Environment variables | Yes | `INPUT_DIGGER_*`, `LOCK_PROVIDER`, `PLAN_UPLOAD_*`, `REPORTING_STRATEGY`, `DIGGER_FILENAME`, `DIGGER_GITHUB_TOKEN` are read as before. |

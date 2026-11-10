@@ -63,6 +63,7 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
         locker: None,
         writer: None,
         max_parallel: 1,
+        head_sha: None,
     });
     let result = run_job(&ctx, job).await;
     match result.outcome {

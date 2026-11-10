@@ -21,6 +21,10 @@ pub struct RunContext {
     pub locker: Option<Arc<PrLocker>>,
     pub writer: Option<ReportWriter>,
     pub max_parallel: usize,
+    /// Head commit of the pull request this run belongs to. Stored with
+    /// plans and checked before applying a stored plan; `None` outside PR
+    /// mode.
+    pub head_sha: Option<String>,
 }
 
 impl RunContext {
@@ -164,6 +168,36 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
     }
 }
 
+/// A stored plan may only be applied to the commit it was produced from.
+/// Plans without commit information (older versions, Digger) are accepted
+/// with a warning; the caller surfaces that in the report.
+pub(super) fn check_stored_plan_commit(
+    project: &str,
+    stored_sha: Option<&str>,
+    head_sha: Option<&str>,
+) -> Result<(), String> {
+    match (stored_sha, head_sha) {
+        (Some(s), Some(h)) if s != h => Err(format!(
+            "stored plan is from commit {} but the pull request head is {}; run `nikama plan` first",
+            short_sha(s),
+            short_sha(h)
+        )),
+        (None, _) => {
+            tracing::warn!(project, "stored plan has no head-sha metadata; cannot verify it matches the PR head");
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn short_sha(sha: &str) -> &str {
+    if sha.len() > 12 {
+        &sha[..12]
+    } else {
+        sha
+    }
+}
+
 fn format_exec_error(e: &crate::engine::ExecError) -> String {
     let mut s = format!("{}\n", e);
     let stderr = e.stderr.trim();
@@ -219,7 +253,11 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
             if !ctx.storage.is_noop() {
                 match std::fs::read(&result.plan_file) {
                     Ok(bytes) => {
-                        if let Err(e) = ctx.storage.store(&job.plan_file_name(), &bytes).await {
+                        if let Err(e) = ctx
+                            .storage
+                            .store(&job.plan_file_name(), &bytes, ctx.head_sha.as_deref())
+                            .await
+                        {
                             return Err(format!(
                                 "plan succeeded but storing the plan file failed: {}",
                                 e
@@ -248,9 +286,23 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                 (plan.plan_file.clone(), Some(plan))
             } else {
                 match ctx.storage.retrieve(&job.plan_file_name()).await {
-                    Ok(Some(bytes)) => {
+                    Ok(Some(stored)) => {
+                        check_stored_plan_commit(
+                            &job.project.name,
+                            stored.head_sha.as_deref(),
+                            ctx.head_sha.as_deref(),
+                        )?;
+                        if stored.head_sha.is_none() {
+                            let n = job.project.name.clone();
+                            ctx.update(move |r| {
+                                r.notes.push(format!(
+                                    "{}: the stored plan carries no commit information (written by an older version); it could not be checked against the PR head",
+                                    n
+                                ))
+                            });
+                        }
                         let p = exec.plan_file();
-                        std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
+                        std::fs::write(&p, stored.bytes).map_err(|e| e.to_string())?;
                         (p, None)
                     }
                     Ok(None) => {
