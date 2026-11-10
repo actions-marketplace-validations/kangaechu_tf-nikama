@@ -337,6 +337,7 @@ async fn run_by_levels_skips_dependents_of_failed_jobs() {
         writer: None,
         max_parallel: 2,
         head_sha: None,
+        cli_config: None,
     });
     let mut results = run_by_levels(ctx, jobs, 2).await;
     results.sort_by(|x, y| x.project.cmp(&y.project));
@@ -416,6 +417,7 @@ fn run_ctx(
         writer: None,
         max_parallel: 1,
         head_sha: head_sha.map(|h| h.to_string()),
+        cli_config: None,
     }
 }
 

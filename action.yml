@@ -31,6 +31,10 @@ inputs:
     description: "Set to `false` to refuse configurations that contain `run:` steps"
     required: false
     default: "true"
+  allowed-providers:
+    description: "Comma-separated provider source patterns (e.g. `hashicorp/aws, hashicorp/*`); when set, Terraform refuses to install any other provider"
+    required: false
+    default: ""
   max-parallel:
     description: "Maximum number of concurrent plans (overrides nikama.yml)"
     required: false
@@ -157,6 +161,7 @@ runs:
         NIKAMA_CONFIG: ${{ inputs.config-file }}
         NIKAMA_CONFIG_REF: ${{ inputs.config-ref }}
         NIKAMA_ALLOW_RUN_STEPS: ${{ inputs.allow-run-steps }}
+        NIKAMA_ALLOWED_PROVIDERS: ${{ inputs.allowed-providers }}
         NIKAMA_MAX_PARALLEL: ${{ inputs.max-parallel }}
         NIKAMA_LOG_LEVEL: ${{ inputs.log-level }}
         LOCK_PROVIDER: ${{ inputs.lock-provider }}

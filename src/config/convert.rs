@@ -107,7 +107,17 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
     validate_projects(&projects, &workflows)?;
     let graph = DependencyGraph::build(&projects)?;
 
+    let mut allowed_providers = Vec::new();
+    for p in &raw.allowed_providers {
+        let n = crate::engine::providers::normalize(p)
+            .map_err(|e| ConfigError::Validation(format!("allowed_providers: {}", e)))?;
+        if !allowed_providers.contains(&n) {
+            allowed_providers.push(n);
+        }
+    }
+
     Ok(Config {
+        allowed_providers,
         projects,
         workflows,
         dependency_mode,

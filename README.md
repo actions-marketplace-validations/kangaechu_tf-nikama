@@ -203,6 +203,52 @@ is the pull request's own version. Two inputs tighten that:
           allow-run-steps: "false"
 ```
 
+### Restricting providers
+
+`terraform plan` runs provider binaries, so a pull request that adds a
+provider (`hashicorp/external`, anything from another registry or namespace)
+runs code of its choosing with the job's credentials. `allowed-providers`
+limits what can be installed:
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.2.0
+        with:
+          allowed-providers: "hashicorp/aws, hashicorp/random, app.terraform.io/myorg/*"
+```
+
+Entries are provider source addresses, `namespace/type` meaning
+`registry.terraform.io/namespace/type`, and `*` may replace any whole
+segment. nikama turns the list into a Terraform CLI configuration
+(`provider_installation` with a `direct` method and that `include` list) and
+passes it to every `terraform` / `tofu` invocation through
+`TF_CLI_CONFIG_FILE`. `init` then refuses any provider outside the list,
+including providers required by child modules, before anything is
+downloaded or executed. Built-in providers (`terraform_data`) are unaffected.
+
+- `nikama.yml` may also carry a top-level `allowed_providers:` list. It can
+  only narrow the workflow input: entries not covered by `allowed-providers`
+  are ignored with a warning, and a list with nothing left is an error.
+  Without the workflow input the `nikama.yml` list applies on its own, which
+  is only meaningful together with `config-ref`.
+- An existing CLI configuration (`TF_CLI_CONFIG_FILE`, `~/.terraformrc`,
+  `~/.tofurc`) is kept and extended. If it already has a
+  `provider_installation` block (a filesystem or network mirror), put the
+  `include` list there instead and leave `allowed-providers` unset.
+  `TF_PLUGIN_CACHE_DIR` keeps working.
+
+### What protects against whom
+
+| Trigger | PR author | What runs their code | Protection |
+|---|---|---|---|
+| `issue_comment` | anyone (fork, read-only) | nothing: commands need write access | write-access check (built in) |
+| `issue_comment` by a maintainer on an untrusted PR | fork, read-only | the PR's Terraform code; its `nikama.yml` unless `config-ref` | `config-ref`, `allow-run-steps`, `allowed-providers` |
+| `pull_request` | fork | nothing useful: read-only token, no OIDC token, no secrets | GitHub |
+| `pull_request` | write access, same repository | the PR's workflow file, so everything | not solvable in nikama: trust write access, or drop `on.pull_request` and use comment commands with branch protection, or gate the cloud role on a protected GitHub Environment |
+
+With comment-only triggering, `config-ref: default` and `allowed-providers`
+hold against users with write access too: changing either requires a merge
+to the default branch.
+
 ## Configuration file
 
 `nikama.yml` (or `nikama.yaml`). A `digger.yml` is still read as a fallback
@@ -229,6 +275,7 @@ The action sets these for you; when running the binary directly:
 | `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`, `INPUT_DRIFT_GITHUB_ISSUES` | drift notifications |
 | `NIKAMA_CONFIG`, `NIKAMA_MAX_PARALLEL`, `NIKAMA_LOG_LEVEL` | CLI options |
 | `NIKAMA_CONFIG_REF`, `NIKAMA_ALLOW_RUN_STEPS` | trusted configuration (see "Trusting the configuration") |
+| `NIKAMA_ALLOWED_PROVIDERS` | provider allowlist (see "Restricting providers") |
 | `TF_PLUGIN_CACHE_DIR` | when set, `init` steps run one at a time |
 
 Validate a configuration locally:

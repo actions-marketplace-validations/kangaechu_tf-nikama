@@ -312,6 +312,8 @@ pub struct Config {
     pub drift_exclude_patterns: Vec<String>,
     pub concurrency: Concurrency,
     pub comment: CommentConfig,
+    /// Normalised `allowed_providers` patterns (see `engine::providers`).
+    pub allowed_providers: Vec<String>,
     pub graph: DependencyGraph,
 }
 

@@ -195,6 +195,7 @@ fn executor<'a>(f: &Fixture, job: &'a Job) -> JobExecutor<'a> {
         work_dir: f.root.join("work"),
         init_lock: None,
         isolate_data_dir: false,
+        cli_config: None,
     }
 }
 
@@ -349,7 +350,53 @@ async fn nonexistent_project_dir_fails_fast() {
         work_dir: tmp.path().join("work"),
         init_lock: None,
         isolate_data_dir: false,
+        cli_config: None,
     };
     let err = exec.plan().await.expect_err("must fail");
     assert_eq!(err.step, "init");
+}
+
+const NULL_PROVIDER_TF: &str = r#"
+terraform {
+  required_providers {
+    null = { source = "hashicorp/null" }
+  }
+}
+resource "null_resource" "demo" {}
+"#;
+
+#[tokio::test]
+async fn cli_config_is_written_and_passed_to_terraform() {
+    let f = fixture(DEMO_TF, "    plan:\n      steps: [init, plan]\n");
+    let plan_job = job(&f, Command::Plan);
+    let mut exec = executor(&f, &plan_job);
+    assert_eq!(exec.cli_config_file().unwrap(), None);
+    std::fs::create_dir_all(&exec.work_dir).unwrap();
+    exec.cli_config = Some("provider_installation {}\n".into());
+    let path = exec.cli_config_file().unwrap().expect("path");
+    assert_eq!(path, f.root.join("work/cli-config.tfrc"));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "provider_installation {}\n"
+    );
+}
+
+#[tokio::test]
+async fn provider_outside_the_allowlist_fails_init() {
+    require_terraform!();
+    let f = fixture(NULL_PROVIDER_TF, "    plan:\n      steps: [init, plan]\n");
+    let plan_job = job(&f, Command::Plan);
+    let mut exec = executor(&f, &plan_job);
+    exec.cli_config = Some(
+        providers::cli_config(&["registry.terraform.io/hashicorp/aws".to_string()], None).unwrap(),
+    );
+    let err = exec.plan().await.expect_err("init must fail");
+    assert_eq!(err.step, "init");
+    assert!(
+        err.message.contains("allowed-providers is set"),
+        "{}",
+        err.message
+    );
+    let text = format!("{}\n{}", err.stdout, err.stderr);
+    assert!(text.contains("hashicorp/null"), "{}", text);
 }

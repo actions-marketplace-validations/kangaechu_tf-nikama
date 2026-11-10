@@ -233,6 +233,7 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         writer: Some(writer.clone()),
         max_parallel: env.max_parallel.unwrap_or(config.concurrency.max_parallel),
         head_sha: Some(pr.head_sha.clone()),
+        cli_config: env.cli_config.clone(),
     });
 
     let (serial, parallel): (Vec<Job>, Vec<Job>) = runnable
