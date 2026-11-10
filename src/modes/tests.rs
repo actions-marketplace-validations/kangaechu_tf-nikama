@@ -574,3 +574,33 @@ async fn plan_stores_head_sha_with_the_plan_file() {
     assert_eq!(stored.head_sha.as_deref(), Some("head-123"));
     assert!(!stored.bytes.is_empty());
 }
+
+#[tokio::test]
+async fn unhandled_events_are_a_noop() {
+    use super::pr_event::build_trigger;
+    use crate::github::{GithubClient, GithubContext};
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    // Never reached for these events; no server behind it.
+    let github = GithubClient::new("tok", "o", "r", Some("http://127.0.0.1:9"));
+    for event in [
+        "push",
+        "workflow_run",
+        "check_suite",
+        "workflow_dispatch",
+        "schedule",
+    ] {
+        let ctx = GithubContext::parse(&format!(
+            r#"{{"event_name":"{}","actor":"me","repository":"o/r","run_id":"1","run_attempt":"1","event":{{}}}}"#,
+            event
+        ))
+        .unwrap();
+        let result = build_trigger(&config, &ctx, &github).await;
+        assert!(
+            matches!(result, Ok(None)),
+            "{} should be ignored, got {:?}",
+            event,
+            result.map(|t| t.is_some())
+        );
+    }
+}

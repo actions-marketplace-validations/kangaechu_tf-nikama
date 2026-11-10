@@ -183,6 +183,8 @@ nikama --validate --local
 `0` ok / nothing to do, `1` configuration error, `2` lock provider error,
 `3` context parse error, `4` initialisation error, `6` event error,
 `7` command error, `8` at least one job failed, `10` not in GitHub Actions.
+Events the action does not handle (for example `push` or `workflow_run`
+reaching the PR mode) are ignored with exit `0`.
 
 ## Contributing
 
