@@ -186,10 +186,67 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    summary is shown in the comment. Stored plans record the PR head commit
    they were produced from; a plan from a different commit is refused.
 7. The commit status is set to success / failure; `auto_merge` merges the PR
-   when every apply succeeded. A push that impacts no project sets both
+   when every apply succeeded (see "Auto-merge and branch protection" below
+   when the base branch is protected). A push that impacts no project sets both
    `digger/plan` and `digger/apply` to success, and a plan run in which no
    project has changes also sets `digger/apply` to success, so either can be
    used as a required check without blocking PRs that have nothing to apply.
+
+### Auto-merge and branch protection
+
+`auto_merge` merges the PR with the token the action runs with. By default
+that is the workflow's `GITHUB_TOKEN`, so the merge is made by
+`github-actions[bot]`, and two branch protection settings on the base branch
+reject it:
+
+- **Restrict who can push to matching branches** (or a ruleset that limits
+  who can push or bypass). Merging counts as a push, and the GitHub Actions
+  identity behind `GITHUB_TOKEN` cannot be added to that list. GitHub answers
+  `405` with "You're not authorized to push to this branch" and the log shows
+  `auto-merge: merge failed`. Neither more `permissions:` nor "Allow
+  specified actors to bypass required pull requests" change this.
+- **Require status checks to pass** with the nikama workflow job itself as a
+  required check. The job cannot finish before it merges, so GitHub answers
+  "Required status check ... is expected". Require the `digger/apply` commit
+  status instead: nikama sets it to success before merging.
+
+The workaround for the first case is to merge as a GitHub App, which can be
+put on the allow list:
+
+1. Create a GitHub App (organisation or user settings → Developer settings)
+   with repository permissions **Contents: read and write**, **Pull
+   requests: read and write**, **Commit statuses: read and write** and, for
+   drift detection with `drift-github-issues: true`, **Issues: read and
+   write**. No webhook is needed.
+2. Install the app on the repository, then add it to "Restrict who can push
+   to matching branches" (branch protection) or to the bypass list (ruleset)
+   of the base branch.
+3. Store the App ID and private key as repository secrets and mint an
+   installation token at the start of the job. Pass it as `github-token`;
+   nikama uses it for every GitHub API call, not only the merge.
+
+```yaml
+    steps:
+      - uses: actions/create-github-app-token@v2
+        id: app-token
+        with:
+          app-id: ${{ secrets.NIKAMA_APP_ID }}
+          private-key: ${{ secrets.NIKAMA_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@v4
+        # ...
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          # ...
+```
+
+The workflow `permissions:` block then only matters for `id-token: write`
+(cloud credentials); the app token carries its own permissions. Unlike
+`GITHUB_TOKEN`, a merge made with an app token triggers `push` workflows on
+the base branch, so a workflow that applies after merge runs as usual.
+
+A personal access token of a user on the allow list works the same way, but
+ties the merge to that person's account.
 
 ### Who can run commands
 
