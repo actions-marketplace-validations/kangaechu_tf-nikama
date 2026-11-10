@@ -326,7 +326,9 @@ pub struct Loaded {
     pub legacy_name: bool,
 }
 
-/// Locate the configuration file following the search order in DESIGN.md §5.1.
+/// Locate the configuration file: `NIKAMA_CONFIG` / `DIGGER_FILENAME`, then
+/// `nikama.yml` / `nikama.yaml`, then `digger.yml` / `digger.yaml` as a
+/// fallback with a warning.
 pub fn find_config_file(
     dir: &Path,
     explicit: Option<&Path>,

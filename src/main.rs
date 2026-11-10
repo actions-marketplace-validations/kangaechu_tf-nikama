@@ -1,6 +1,4 @@
 //! nikama: backendless Terraform/OpenTofu PR automation for GitHub Actions.
-//!
-//! See `docs/DESIGN.md` for the design.
 
 // The configuration and result models intentionally carry fields that are
 // parsed for compatibility but not read yet.

@@ -1,4 +1,4 @@
-//! Single-comment run report model and Markdown rendering (DESIGN.md §12).
+//! Single-comment run report model and Markdown rendering.
 
 use super::COMMENT_MAX_CHARS;
 use crate::config::ShowEmptyPlans;

@@ -14,7 +14,7 @@ pub enum PrAction {
     Ignore(String),
 }
 
-/// Decide which workflow commands a PR event maps to (DESIGN.md §6.2).
+/// Decide which workflow commands a PR event maps to.
 /// `commands` are resolved per project because each workflow may differ; this
 /// returns the *selector* and the caller looks up the workflow.
 pub fn classify_pr_event(event: &PullRequestEvent, config: &Config) -> PrSelector {

@@ -7,7 +7,7 @@ pub mod run;
 #[cfg(test)]
 mod tests;
 
-/// Process exit codes (DESIGN.md §15.3).
+/// Process exit codes (see the README).
 pub mod exit {
     pub const OK: i32 = 0;
     pub const CONFIG: i32 = 1;
