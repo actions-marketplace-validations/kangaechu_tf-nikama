@@ -103,11 +103,16 @@ impl DriftNotifier for SlackWebhook {
 
 pub struct GithubIssueNotifier {
     github: GithubClient,
+    /// Wakeup word used in the `apply` hint of the issue body.
+    wakeup_word: String,
 }
 
 impl GithubIssueNotifier {
-    pub fn new(github: GithubClient) -> Self {
-        Self { github }
+    pub fn new(github: GithubClient, wakeup_word: &str) -> Self {
+        Self {
+            github,
+            wakeup_word: wakeup_word.to_string(),
+        }
     }
 
     fn title(project: &str) -> String {
@@ -120,8 +125,8 @@ impl DriftNotifier for GithubIssueNotifier {
     async fn notify(&self, project: &str, repo: &str, plan: &str) -> anyhow::Result<()> {
         let title = Self::title(project);
         let body_head = format!(
-            "Drift was detected in project `{}` of `{}`.\n\nComment `nikama apply -p {}` on a PR that touches this project, or fix the drift manually.\n\n```terraform\n",
-            project, repo, project
+            "Drift was detected in project `{}` of `{}`.\n\nComment `{} apply -p {}` on a PR that touches this project, or fix the drift manually.\n\n```terraform\n",
+            project, repo, self.wakeup_word, project
         );
         let body_tail = "\n```\n";
         let budget = COMMENT_MAX_CHARS.saturating_sub(body_head.len() + body_tail.len() + 200);
@@ -157,7 +162,10 @@ impl DriftNotifier for GithubIssueNotifier {
 }
 
 /// Pick the notifier from the environment.
-pub fn from_env(github: &GithubClient) -> anyhow::Result<Box<dyn DriftNotifier>> {
+pub fn from_env(
+    github: &GithubClient,
+    wakeup_word: &str,
+) -> anyhow::Result<Box<dyn DriftNotifier>> {
     if let Some(url) = crate::util::env_first(&[
         "INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL",
         "NIKAMA_DRIFT_SLACK_WEBHOOK_URL",
@@ -167,7 +175,10 @@ pub fn from_env(github: &GithubClient) -> anyhow::Result<Box<dyn DriftNotifier>>
     if crate::util::env_opt("INPUT_DRIFT_GITHUB_ISSUES").is_some()
         || crate::util::env_is_true("NIKAMA_DRIFT_GITHUB_ISSUES")
     {
-        return Ok(Box::new(GithubIssueNotifier::new(github.clone())));
+        return Ok(Box::new(GithubIssueNotifier::new(
+            github.clone(),
+            wakeup_word,
+        )));
     }
     anyhow::bail!(
         "no drift notification configured: set INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL or INPUT_DRIFT_GITHUB_ISSUES=true"

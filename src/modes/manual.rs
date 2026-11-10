@@ -18,7 +18,7 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
             return exit::CONFIG;
         }
     };
-    let command = match Command::parse(&command_str) {
+    let command = match Command::parse_with(&command_str, &config.wakeup_words) {
         Some(c @ (Command::Plan | Command::Apply | Command::Destroy)) => c,
         _ => {
             tracing::error!(command = %command_str, "manual mode supports plan, apply and destroy only");

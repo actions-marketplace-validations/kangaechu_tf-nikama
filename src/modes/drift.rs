@@ -16,7 +16,7 @@ pub async fn run(
     namespace: &str,
     github: GithubClient,
 ) -> i32 {
-    let notifier = match crate::report::drift::from_env(&github) {
+    let notifier = match crate::report::drift::from_env(&github, config.wakeup_word()) {
         Ok(n) => n,
         Err(e) => {
             tracing::error!(error = %e, "drift notification not configured");

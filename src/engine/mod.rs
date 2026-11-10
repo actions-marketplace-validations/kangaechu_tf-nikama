@@ -28,10 +28,20 @@ pub enum Command {
 impl Command {
     /// Accepts `digger plan`, `nikama plan` and bare `plan` (case-insensitive).
     pub fn parse(s: &str) -> Option<Command> {
+        Self::parse_with(s, &[])
+    }
+
+    /// Like [`Command::parse`], additionally accepting the configured wakeup
+    /// words as prefix. The default words stay accepted so that
+    /// `workflow_configuration` defaults (`digger plan`, ...) keep working
+    /// whatever `wakeup_word` says.
+    pub fn parse_with(s: &str, wakeup_words: &[String]) -> Option<Command> {
         let s = s.trim().to_ascii_lowercase();
-        let s = s
-            .strip_prefix("digger ")
-            .or_else(|| s.strip_prefix("nikama "))
+        let s = crate::config::DEFAULT_WAKEUP_WORDS
+            .iter()
+            .map(|w| w.to_ascii_lowercase())
+            .chain(wakeup_words.iter().map(|w| w.to_ascii_lowercase()))
+            .find_map(|w| s.strip_prefix(&format!("{} ", w)))
             .unwrap_or(&s)
             .trim();
         match s {
@@ -165,5 +175,22 @@ mod tests {
         assert_eq!(Command::parse("Nikama Apply"), Some(Command::Apply));
         assert_eq!(Command::parse("unlock"), Some(Command::Unlock));
         assert_eq!(Command::parse("digger noop"), None);
+    }
+
+    #[test]
+    fn parses_commands_with_configured_wakeup_word() {
+        let words = vec!["tf".to_string()];
+        assert_eq!(Command::parse_with("tf plan", &words), Some(Command::Plan));
+        assert_eq!(
+            Command::parse_with("TF Apply", &words),
+            Some(Command::Apply)
+        );
+        // The defaults keep working for workflow_configuration entries.
+        assert_eq!(
+            Command::parse_with("digger unlock", &words),
+            Some(Command::Unlock)
+        );
+        assert_eq!(Command::parse_with("tf", &words), None);
+        assert_eq!(Command::parse("tf plan"), None);
     }
 }

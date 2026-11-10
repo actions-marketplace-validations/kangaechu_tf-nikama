@@ -36,6 +36,9 @@ pub struct RawConfig {
     /// Can only narrow the `allowed-providers` workflow input.
     #[serde(default)]
     pub allowed_providers: Vec<String>,
+    /// Word(s) a PR comment must start with to be treated as a command
+    /// (`nikama plan`, ...). A string or a list; replaces the defaults.
+    pub wakeup_word: Option<OneOrMany>,
 
     // ---- unsupported keys (backend-only or unused in Digger) ----
     pub respect_layers: Option<Value>,
@@ -97,6 +100,23 @@ impl RawConfig {
             }
         }
         keys
+    }
+}
+
+/// A YAML value that is either one string or a list of strings.
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum OneOrMany {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl OneOrMany {
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            OneOrMany::One(s) => vec![s],
+            OneOrMany::Many(v) => v,
+        }
     }
 }
 

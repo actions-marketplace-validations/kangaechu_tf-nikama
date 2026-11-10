@@ -92,6 +92,8 @@ pub struct RunReport {
     pub notes: Vec<String>,
     pub show_empty_plans: ShowEmptyPlans,
     pub finished: bool,
+    /// Wakeup word used in the command hints of the footer.
+    pub wakeup_word: String,
 }
 
 impl RunReport {
@@ -100,6 +102,7 @@ impl RunReport {
         command: Command,
         run_url: &str,
         show_empty_plans: ShowEmptyPlans,
+        wakeup_word: &str,
     ) -> Self {
         Self {
             marker: marker.to_string(),
@@ -110,6 +113,7 @@ impl RunReport {
             notes: Vec::new(),
             show_empty_plans,
             finished: false,
+            wakeup_word: wakeup_word.to_string(),
         }
     }
 
@@ -223,8 +227,8 @@ impl RunReport {
     }
 
     fn footer(&self) -> String {
-        "\n---\n`nikama apply` · `nikama apply -p <project>` · `nikama unlock` · `nikama help`\n"
-            .to_string()
+        let w = &self.wakeup_word;
+        format!("\n---\n`{w} apply` · `{w} apply -p <project>` · `{w} unlock` · `{w} help`\n")
     }
 
     /// Detail block for a row, given a character budget for the detail body.
@@ -377,6 +381,7 @@ mod tests {
             Command::Plan,
             "https://github.com/o/r/actions/runs/1",
             ShowEmptyPlans::Table,
+            "nikama",
         );
         {
             let a = r.row_mut("app");

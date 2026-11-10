@@ -179,15 +179,20 @@ pub(super) fn check_stored_plan_commit(
     project: &str,
     stored_sha: Option<&str>,
     head_sha: Option<&str>,
+    wakeup_word: &str,
 ) -> Result<(), String> {
     match (stored_sha, head_sha) {
         (Some(s), Some(h)) if s != h => Err(format!(
-            "stored plan is from commit {} but the pull request head is {}; run `nikama plan` first",
+            "stored plan is from commit {} but the pull request head is {}; run `{} plan` first",
             short_sha(s),
-            short_sha(h)
+            short_sha(h),
+            wakeup_word
         )),
         (None, _) => {
-            tracing::warn!(project, "stored plan has no head-sha metadata; cannot verify it matches the PR head");
+            tracing::warn!(
+                project,
+                "stored plan has no head-sha metadata; cannot verify it matches the PR head"
+            );
             Ok(())
         }
         _ => Ok(()),
@@ -295,6 +300,7 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                             &job.project.name,
                             stored.head_sha.as_deref(),
                             ctx.head_sha.as_deref(),
+                            ctx.config.wakeup_word(),
                         )?;
                         if stored.head_sha.is_none() {
                             let n = job.project.name.clone();
@@ -311,8 +317,9 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                     }
                     Ok(None) => {
                         return Err(format!(
-                            "no stored plan found for this pull request ({}); run `nikama plan` first",
-                            job.plan_file_name()
+                            "no stored plan found for this pull request ({}); run `{} plan` first",
+                            job.plan_file_name(),
+                            ctx.config.wakeup_word()
                         ));
                     }
                     Err(e) => return Err(format!("could not retrieve stored plan: {}", e)),

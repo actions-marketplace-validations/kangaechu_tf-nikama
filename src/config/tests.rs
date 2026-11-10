@@ -552,3 +552,50 @@ fn no_lock_label_is_trimmed_and_optional() {
     .unwrap();
     assert_eq!(c.no_lock_label, None);
 }
+
+#[test]
+fn wakeup_word_defaults_to_nikama_and_digger() {
+    let c = load("projects: []\n").unwrap();
+    assert_eq!(c.wakeup_words, vec!["nikama", "digger"]);
+    assert_eq!(c.wakeup_word(), "nikama");
+}
+
+#[test]
+fn wakeup_word_accepts_a_string_or_a_list() {
+    let c = load("projects: []\nwakeup_word: tf\n").unwrap();
+    assert_eq!(c.wakeup_words, vec!["tf"]);
+    assert_eq!(c.wakeup_word(), "tf");
+
+    let c = load("projects: []\nwakeup_word: [' Terraform ', nikama, TERRAFORM]\n").unwrap();
+    // Trimmed, order kept, case-insensitive duplicates dropped.
+    assert_eq!(c.wakeup_words, vec!["Terraform", "nikama"]);
+    assert_eq!(c.wakeup_word(), "Terraform");
+}
+
+#[test]
+fn wakeup_word_rejects_bad_values() {
+    assert!(err_msg(load("projects: []\nwakeup_word: ''\n")).contains("must not be empty"));
+    assert!(err_msg(load("projects: []\nwakeup_word: []\n")).contains("at least one word"));
+    assert!(err_msg(load("projects: []\nwakeup_word: 'tf bot'\n"))
+        .contains("must not contain whitespace"));
+    assert!(err_msg(load("projects: []\nwakeup_word: '-p'\n")).contains("must not start with '-'"));
+}
+
+#[test]
+fn workflow_configuration_accepts_the_configured_wakeup_word() {
+    let c = load(
+        "projects: []\nwakeup_word: tf\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"tf plan\", \"digger lock\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.workflows["w"].configuration.on_pull_request_pushed,
+        vec!["tf plan", "digger lock"]
+    );
+    // Default `digger plan` / `digger unlock` entries stay valid whatever the word.
+    assert_eq!(
+        c.workflows["default"].configuration.on_pull_request_pushed,
+        vec!["digger plan"]
+    );
+    let r = load("projects: []\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"tf plan\"]\n");
+    assert!(err_msg(r).contains("unknown command 'tf plan'"));
+}

@@ -20,6 +20,9 @@ pub const CONFIG_FILE_NAMES: [&str; 2] = ["nikama.yml", "nikama.yaml"];
 pub const LEGACY_CONFIG_FILE_NAMES: [&str; 2] = ["digger.yml", "digger.yaml"];
 pub const DEFAULT_WORKFLOW: &str = "default";
 pub const DEFAULT_WORKSPACE: &str = "default";
+/// Words a PR comment may start with to address this tool, unless the
+/// configuration sets `wakeup_word`. The first one is used in messages.
+pub const DEFAULT_WAKEUP_WORDS: [&str; 2] = ["nikama", "digger"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -317,10 +320,18 @@ pub struct Config {
     pub comment: CommentConfig,
     /// Normalised `allowed_providers` patterns (see `engine::providers`).
     pub allowed_providers: Vec<String>,
+    /// Words a PR comment may start with to be treated as a command
+    /// (case-insensitive). Never empty; the first one is used in messages.
+    pub wakeup_words: Vec<String>,
     pub graph: DependencyGraph,
 }
 
 impl Config {
+    /// The wakeup word shown in help texts and comments.
+    pub fn wakeup_word(&self) -> &str {
+        &self.wakeup_words[0]
+    }
+
     pub fn project(&self, name: &str) -> Option<&Project> {
         self.projects.iter().find(|p| p.name == name)
     }
