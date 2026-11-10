@@ -120,7 +120,7 @@ impl DriftNotifier for GithubIssueNotifier {
     async fn notify(&self, project: &str, repo: &str, plan: &str) -> anyhow::Result<()> {
         let title = Self::title(project);
         let body_head = format!(
-            "Drift was detected in project `{}` of `{}`.\n\nComment `digger apply -p {}` on a PR that touches this project, or fix the drift manually.\n\n```terraform\n",
+            "Drift was detected in project `{}` of `{}`.\n\nComment `nikama apply -p {}` on a PR that touches this project, or fix the drift manually.\n\n```terraform\n",
             project, repo, project
         );
         let body_tail = "\n```\n";
