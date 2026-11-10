@@ -183,3 +183,68 @@ async fn combined_status_and_merge() {
     assert_eq!(s.statuses[0].context, "ci/test");
     c.merge_pr(9, "squash", "abc", "auto-merge").await.unwrap();
 }
+
+#[tokio::test]
+async fn get_pr_reads_author() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/9"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "head": {"ref": "feat", "sha": "abc"},
+            "base": {"ref": "main", "sha": "def"},
+            "user": {"login": "alice"},
+            "merged": false, "state": "open", "draft": false,
+            "mergeable": true, "mergeable_state": "clean"
+        })))
+        .mount(&server)
+        .await;
+    let pr = client(&server).await.get_pr(9).await.unwrap();
+    assert_eq!(pr.author, "alice");
+}
+
+#[tokio::test]
+async fn list_reviews_keeps_order_and_states() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/9/reviews"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+            {"user": {"login": "bob"}, "state": "CHANGES_REQUESTED"},
+            {"user": {"login": "carol"}, "state": "COMMENTED"},
+            {"user": {"login": "bob"}, "state": "APPROVED"}
+        ])))
+        .mount(&server)
+        .await;
+    let reviews = client(&server).await.list_reviews(9).await.unwrap();
+    let got: Vec<(&str, &str)> = reviews
+        .iter()
+        .map(|r| (r.user.as_str(), r.state.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("bob", "CHANGES_REQUESTED"),
+            ("carol", "COMMENTED"),
+            ("bob", "APPROVED")
+        ]
+    );
+}
+
+#[tokio::test]
+async fn compare_reads_ahead_and_behind() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/compare/main...abc123"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "status": "diverged", "ahead_by": 4, "behind_by": 2
+        })))
+        .mount(&server)
+        .await;
+    let cmp = client(&server)
+        .await
+        .compare("main", "abc123")
+        .await
+        .unwrap();
+    assert_eq!(cmp.ahead_by, 4);
+    assert_eq!(cmp.behind_by, 2);
+}

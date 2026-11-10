@@ -109,9 +109,15 @@ See [`examples/nikama.yml`](examples/nikama.yml) for the full schema and
    the commit status is set to *pending*.
 4. PR locks are acquired for all projects up front; projects locked by another
    open PR are reported and skipped.
-5. Plans run in parallel (`concurrency.max_parallel`); applies run level by
+5. Before an apply, each project's `apply_requirements` are checked against
+   the PR: `mergeable` (GitHub reports the PR as mergeable), `approved` (at
+   least one approving review from someone other than the author and no
+   outstanding "changes requested"), `undiverged` (the branch is not behind
+   its base). The default is `[mergeable]`; a closed, unmerged PR is always
+   rejected.
+6. Plans run in parallel (`concurrency.max_parallel`); applies run level by
    level in dependency order. The comment is edited as projects finish.
-6. The commit status is set to success / failure; `auto_merge` merges the PR
+7. The commit status is set to success / failure; `auto_merge` merges the PR
    when every apply succeeded.
 
 ## Configuration file

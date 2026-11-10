@@ -15,6 +15,14 @@ projects:
     workspace: staging
     depends_on: [network]
     workflow: with_vars
+    # Checks run before `digger apply` (default: [mergeable]). Each value is
+    # enforced independently:
+    #   mergeable  - GitHub reports the PR as mergeable (no conflicts, required
+    #                checks green); skipped by workflow_configuration.skip_merge_check
+    #   approved   - at least one approving review from someone other than the
+    #                PR author, and no outstanding "changes requested"
+    #   undiverged - the PR branch is not behind its base branch
+    apply_requirements: [approved, mergeable, undiverged]
     aws_role_to_assume:
       aws_role_region: ap-northeast-1
       state: arn:aws:iam::123456789012:role/tf-state

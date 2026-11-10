@@ -51,12 +51,29 @@ pub struct PrInfo {
     pub draft: bool,
     pub mergeable: Option<bool>,
     pub mergeable_state: Option<String>,
+    /// Login of the user who opened the PR.
+    pub author: String,
 }
 
 impl PrInfo {
     pub fn is_closed(&self) -> bool {
         self.state == "closed"
     }
+}
+
+/// One pull request review (`GET /pulls/{n}/reviews`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewInfo {
+    pub user: String,
+    /// `APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`, `DISMISSED` or `PENDING`.
+    pub state: String,
+}
+
+/// Result of `GET /compare/{base}...{head}`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompareInfo {
+    pub ahead_by: u64,
+    pub behind_by: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -206,6 +223,36 @@ impl GithubClient {
             draft: v["draft"].as_bool().unwrap_or(false),
             mergeable: v["mergeable"].as_bool(),
             mergeable_state: v["mergeable_state"].as_str().map(|s| s.to_string()),
+            author: v["user"]["login"].as_str().unwrap_or_default().to_string(),
+        })
+    }
+
+    /// Reviews of a PR in submission order (oldest first).
+    pub async fn list_reviews(&self, number: u64) -> Result<Vec<ReviewInfo>> {
+        let items = self
+            .paginate(&self.repo_path(&format!("/pulls/{}/reviews", number)), "")
+            .await?;
+        Ok(items
+            .iter()
+            .map(|r| ReviewInfo {
+                user: r["user"]["login"].as_str().unwrap_or_default().to_string(),
+                state: r["state"].as_str().unwrap_or_default().to_string(),
+            })
+            .collect())
+    }
+
+    /// How far `head` is ahead of / behind `base`.
+    pub async fn compare(&self, base: &str, head: &str) -> Result<CompareInfo> {
+        let v = self
+            .request(
+                Method::GET,
+                &self.repo_path(&format!("/compare/{}...{}", base, head)),
+                None,
+            )
+            .await?;
+        Ok(CompareInfo {
+            ahead_by: v["ahead_by"].as_u64().unwrap_or(0),
+            behind_by: v["behind_by"].as_u64().unwrap_or(0),
         })
     }
 
