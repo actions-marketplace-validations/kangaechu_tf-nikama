@@ -2,7 +2,7 @@
 
 use super::client::{CheckKind, GithubClient};
 use serde_json::json;
-use wiremock::matchers::{body_partial_json, header, method, path, query_param};
+use wiremock::matchers::{body_json, body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 async fn client(server: &MockServer) -> GithubClient {
@@ -170,9 +170,9 @@ async fn combined_status_and_merge() {
         .await;
     Mock::given(method("PUT"))
         .and(path("/repos/o/r/pulls/9/merge"))
-        .and(body_partial_json(
-            json!({"merge_method": "squash", "sha": "abc"}),
-        ))
+        // Exact body match: no commit_title must be sent, so GitHub builds the
+        // default merge/squash message from the PR title.
+        .and(body_json(json!({"merge_method": "squash", "sha": "abc"})))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"merged": true})))
         .expect(1)
         .mount(&server)
@@ -181,7 +181,7 @@ async fn combined_status_and_merge() {
     let s = c.combined_status("abc").await.unwrap();
     assert_eq!(s.state, "success");
     assert_eq!(s.statuses[0].context, "ci/test");
-    c.merge_pr(9, "squash", "abc", "auto-merge").await.unwrap();
+    c.merge_pr(9, "squash", "abc").await.unwrap();
 }
 
 #[tokio::test]

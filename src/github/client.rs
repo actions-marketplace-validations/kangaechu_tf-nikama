@@ -602,18 +602,14 @@ query($owner: String!, $repo: String!, $number: Int!) {
         Ok(serde_json::from_value(v)?)
     }
 
-    pub async fn merge_pr(
-        &self,
-        number: u64,
-        method: &str,
-        sha: &str,
-        message: &str,
-    ) -> Result<()> {
+    /// Merges the PR. No `commit_title` is sent so GitHub builds the default
+    /// message (`Merge pull request #N ...` or `<PR title> (#N)`), honouring
+    /// the repository's merge-message settings.
+    pub async fn merge_pr(&self, number: u64, method: &str, sha: &str) -> Result<()> {
         self.request(
             Method::PUT,
             &self.repo_path(&format!("/pulls/{}/merge", number)),
             Some(json!({
-                "commit_title": message,
                 "merge_method": method,
                 "sha": sha,
             })),
