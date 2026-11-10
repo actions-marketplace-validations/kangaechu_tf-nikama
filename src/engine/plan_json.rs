@@ -118,6 +118,12 @@ pub fn plan_summary_from_json(json: &str) -> Result<PlanSummary, serde_json::Err
     Ok(s)
 }
 
+/// Make a resource address safe inside a Markdown table cell: `|` splits
+/// cells even inside backticks, so it is escaped; line breaks end the row.
+fn escape_table_cell(s: &str) -> String {
+    s.replace('|', "\\|").replace(['\r', '\n'], " ")
+}
+
 /// Markdown table of the resource changes.
 pub fn plan_summary_table(summary: &PlanSummary) -> String {
     if summary.rows.is_empty() {
@@ -136,7 +142,11 @@ pub fn plan_summary_table(summary: &PlanSummary) -> String {
                 other => other,
             })
             .collect();
-        out.push_str(&format!("| `{}` | {} |\n", addr, sym.join(", ")));
+        out.push_str(&format!(
+            "| `{}` | {} |\n",
+            escape_table_cell(addr),
+            sym.join(", ")
+        ));
     }
     if summary.output_changes > 0 {
         out.push_str(&format!(
@@ -199,6 +209,27 @@ mod tests {
         );
         assert!(!s.is_empty());
         assert!(plan_summary_table(&s).contains("aws_instance.c"));
+    }
+
+    #[test]
+    fn table_escapes_pipes_in_addresses() {
+        let json = r#"{
+          "resource_changes": [
+            {"address": "module.x[\"a|b\"].aws_s3_bucket.this", "change": {"actions": ["create"]}},
+            {"address": "module.y[\"with space\"].aws_s3_bucket.this", "change": {"actions": ["update"]}}
+          ]
+        }"#;
+        let s = plan_summary_from_json(json).unwrap();
+        let table = plan_summary_table(&s);
+        assert!(
+            table.contains("| `module.x[\"a\\|b\"].aws_s3_bucket.this` | ➕ create |\n"),
+            "{}",
+            table
+        );
+        assert!(table.contains("| `module.y[\"with space\"].aws_s3_bucket.this` | 🔄 update |\n"));
+        // Header, separator and exactly two data rows: nothing split.
+        assert_eq!(table.lines().count(), 4);
+        assert!(table.lines().skip(2).all(|l| l.matches(" | ").count() == 1));
     }
 
     #[test]
