@@ -264,8 +264,8 @@ clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マ
 | `pull_request` | `action`、`pull_request.{number, draft, head.ref, head.sha, base.ref, merged}`、`repository.{default_branch, full_name}`、`sender.login` |
 | `issue_comment` | `issue.{number, pull_request}`、`comment.{id, body}`、`repository.{default_branch, full_name}`、`sender.login` |
 | `merge_group` | 無視して exit 0 |
-| `workflow_dispatch`、`schedule` | manual / drift モードで使用 |
-| その他 | 「unsupported event」で exit 6 |
+| `workflow_dispatch`、`schedule` | manual / drift モードで使用。モード未指定で PR モードに届いた場合は「mode を指定せよ」の warn を出して exit 0 |
+| その他 | 無視して exit 0（warn ログのみ）。広いトリガーを持つ workflow に同居しても失敗させない |
 
 `issue_comment` で `issue.pull_request` が無い（Issue へのコメント）場合は PR ではないので exit 0 にする（現行は API エラーになる）。
 
@@ -677,7 +677,7 @@ nikama [--config PATH] [--max-parallel N] [--log-level LEVEL] [--repo-root DIR] 
 | 2 | ロックプロバイダ初期化失敗 |
 | 3 | GITHUB_CONTEXT パース失敗 |
 | 4 | GitHub API / AWS 初期化失敗 |
-| 6 | イベント処理失敗 |
+| 6 | イベント処理失敗（PR の変更ファイル取得や PR 取得の API エラー。未対応イベント名は 0） |
 | 7 | コマンド解釈失敗 |
 | 8 | ジョブ実行失敗（1 件でも失敗） |
 | 10 | CI 未検出 |

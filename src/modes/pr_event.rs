@@ -14,7 +14,7 @@ use crate::lock::{LockOutcome, PrLocker};
 use crate::report::{ReportWriter, RowStatus, RunReport};
 use std::sync::Arc;
 
-struct Trigger {
+pub(super) struct Trigger {
     pr_number: u64,
     jobs: Vec<Job>,
     /// Does the job set cover every impacted project? (needed for auto-merge)
@@ -288,7 +288,7 @@ pub(super) fn summarize(results: &[JobResult], lock_failed: bool) -> String {
     parts.join(", ")
 }
 
-async fn build_trigger(
+pub(super) async fn build_trigger(
     config: &Config,
     ctx: &GithubContext,
     github: &GithubClient,
@@ -398,9 +398,21 @@ async fn build_trigger(
             tracing::info!("ignoring merge_group event");
             Ok(None)
         }
+        // Events this action does not handle are a no-op, not a failure: a
+        // workflow with broader triggers (`push`, `workflow_run`, ...) must
+        // not go red because of us. Dispatch / schedule without a mode is a
+        // configuration mistake, so say what is missing, but still exit 0.
+        "workflow_dispatch" | "schedule" => {
+            tracing::warn!(
+                event = %ctx.event_name,
+                "ignoring {} event in PR mode; set `mode: manual` (workflow_dispatch) or `mode: drift-detection` (schedule) to run it",
+                ctx.event_name
+            );
+            Ok(None)
+        }
         other => {
-            tracing::error!(event = other, "unsupported event for PR mode (use mode: manual or drift-detection for workflow_dispatch/schedule)");
-            Err(exit::EVENT)
+            tracing::warn!(event = other, "ignoring event not handled in PR mode");
+            Ok(None)
         }
     }
 }
