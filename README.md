@@ -147,7 +147,10 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    summary is shown in the comment. Stored plans record the PR head commit
    they were produced from; a plan from a different commit is refused.
 7. The commit status is set to success / failure; `auto_merge` merges the PR
-   when every apply succeeded.
+   when every apply succeeded. A push that impacts no project sets both
+   `digger/plan` and `digger/apply` to success, and a plan run in which no
+   project has changes also sets `digger/apply` to success, so either can be
+   used as a required check without blocking PRs that have nothing to apply.
 
 ## Configuration file
 

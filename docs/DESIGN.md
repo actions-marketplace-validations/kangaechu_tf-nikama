@@ -612,6 +612,8 @@ comment:
 - context: plan 系なら `digger/plan`、apply 系なら `digger/apply`。
 - run 開始時に `pending`（description「running N projects」、target_url は Actions run）。
 - 終了時に `success` または `failure`（description に「3 changed, 1 failed」等）。
+- **やることが無い run でも status を付ける**: PR への push、またはコメントの `plan` / `apply` でジョブが 0 件（impacted なし、または workflow のコマンドが空）のときは、head SHA の `digger/plan` と `digger/apply` を両方 `success`（「no impacted projects」/「nothing to run for this event」）にする。必須チェックが missing のまま残ったり、前の run の failure が新しい commit に引き継がれて見えたりするのを防ぐ。close / merge / draft 化、`lock` / `unlock` コマンドでは付けない。コメントは投稿しない。
+- **全 plan が空なら `digger/apply` も success**: plan の run が impacted 全件を対象にし（`-p` / `-d` による部分実行でない）、全ジョブ成功かつ全 plan が no changes のとき、`digger/apply` を `success`（「no changes to apply」）にする。1 件でも変更があれば `digger/apply` は触らない。commit status は SHA ごとなので、変更のある commit では apply が走るまで missing のままになる。
 - プロジェクト別 `digger/plan/<project>` はオプトイン（`comment.per_project_status: true`、既定 false）。
 
 ---
