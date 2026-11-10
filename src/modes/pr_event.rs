@@ -461,6 +461,13 @@ pub(super) async fn build_trigger(
                 tracing::error!(error = %e, "could not fetch pull request");
                 exit::EVENT
             })?;
+            if let Some(reason) = closed_pr_rejection(&pr, command) {
+                tracing::info!(command = %command, merged = pr.merged, "rejecting command on a closed pull request");
+                let _ = github
+                    .create_comment(pr_number, &format!("**nikama**: {}", reason))
+                    .await;
+                return Ok(None);
+            }
             let files = github.changed_files(pr_number).await.map_err(|e| {
                 tracing::error!(error = %e, "could not list changed files");
                 exit::EVENT
@@ -755,6 +762,20 @@ fn released_notes(released: &[String]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Comment commands on a closed pull request (merged or not) are rejected,
+/// except `unlock`, which is how leftover locks are cleaned up. Apply after
+/// merge is handled by `on_commit_to_default`, not by comments.
+pub(super) fn closed_pr_rejection(pr: &crate::github::PrInfo, command: Command) -> Option<String> {
+    if !pr.is_closed() || command == Command::Unlock {
+        return None;
+    }
+    let state = if pr.merged { "merged" } else { "closed" };
+    Some(format!(
+        "this pull request is {}; `{}` is not run on closed pull requests (only `nikama unlock` is accepted).",
+        state, command
+    ))
 }
 
 fn log_impacted(impacted: &[crate::config::Project]) {
