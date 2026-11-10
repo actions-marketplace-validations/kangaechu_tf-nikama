@@ -40,13 +40,17 @@ inputs:
     required: false
     default: ""
   lock-provider:
-    description: "`aws` (DynamoDB, default), `gcp` (Cloud Storage bucket) or `noop`"
+    description: "`aws` (DynamoDB, default), `s3` (S3 bucket), `gcp` (Cloud Storage bucket) or `noop`"
     required: false
     default: "aws"
   lock-table:
     description: "DynamoDB table for PR locks"
     required: false
     default: "DiggerDynamoDBLockTable"
+  aws-lock-bucket:
+    description: "S3 bucket for PR locks when lock-provider is s3"
+    required: false
+    default: ""
   google-lock-bucket:
     description: "Cloud Storage bucket for PR locks when lock-provider is gcp"
     required: false
@@ -166,6 +170,7 @@ runs:
         NIKAMA_LOG_LEVEL: ${{ inputs.log-level }}
         LOCK_PROVIDER: ${{ inputs.lock-provider }}
         NIKAMA_LOCK_TABLE: ${{ inputs.lock-table }}
+        AWS_S3_LOCK_BUCKET: ${{ inputs.aws-lock-bucket }}
         GOOGLE_STORAGE_LOCK_BUCKET: ${{ inputs.google-lock-bucket }}
         PLAN_UPLOAD_DESTINATION: ${{ inputs.upload-plan-destination }}
         AWS_S3_BUCKET: ${{ inputs.upload-plan-destination-s3-bucket }}

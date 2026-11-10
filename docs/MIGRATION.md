@@ -195,7 +195,7 @@ What changed and why:
 | `digger-filename` | `config-file` | `DIGGER_FILENAME` env is also still honoured. |
 | `digger-token`, `digger-hostname`, `digger-organisation`, `digger-spec` | (none) | Backend only; ignored if set in `env`. |
 | `disable-locking` | `lock-provider: noop` | `DISABLE_LOCKING=true` env also works. |
-| (none) | `lock-provider` | New. `aws` (default), `gcp` or `noop`. Digger picked `gcp` when `google-lock-bucket` was set. |
+| (none) | `lock-provider` | New. `aws` (default), `s3`, `gcp` or `noop`. Digger picked `gcp` when `google-lock-bucket` was set. `s3` keeps locks in an S3 bucket (`aws-lock-bucket`) instead of DynamoDB; it has no Digger equivalent, so switch to it only once no open PR holds a DynamoDB lock. |
 | (none) | `lock-table` | New. Defaults to `DiggerDynamoDBLockTable`. |
 | `upload-plan-destination` | `upload-plan-destination` | `aws`, `gcp` or empty. `github` and `azure` are not supported. |
 | `upload-plan-destination-s3-*` | same names | Unchanged. |

@@ -113,6 +113,17 @@ async fn from_env_selection() {
     std::env::remove_var("STORAGE_EMULATOR_HOST");
     std::env::remove_var("GOOGLE_STORAGE_LOCK_BUCKET");
 
+    std::env::remove_var("AWS_S3_LOCK_BUCKET");
+    std::env::set_var("LOCK_PROVIDER", "s3");
+    let err = from_env(true).await.err().unwrap().to_string();
+    assert!(err.contains("AWS_S3_LOCK_BUCKET"), "{}", err);
+
+    std::env::set_var("AWS_S3_LOCK_BUCKET", "locks");
+    std::env::set_var("AWS_REGION", "us-east-1");
+    assert_eq!(from_env(true).await.unwrap().name(), "s3");
+    std::env::remove_var("AWS_REGION");
+    std::env::remove_var("AWS_S3_LOCK_BUCKET");
+
     std::env::set_var("LOCK_PROVIDER", "azure");
     let err = from_env(true).await.err().unwrap().to_string();
     assert!(err.contains("not supported"), "{}", err);

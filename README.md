@@ -25,8 +25,9 @@ Supported in the first release:
 
 - **GitHub** `pull_request` and `issue_comment` events, `workflow_dispatch` (manual) and `schedule` (drift)
 - **Terraform** and **OpenTofu**
-- **AWS**: DynamoDB PR locks (schema-compatible with Digger), S3 plan storage,
-  GitHub OIDC → STS role assumption, Cognito Identity
+- **AWS**: DynamoDB PR locks (schema-compatible with Digger) or S3 PR locks
+  (no DynamoDB table needed), S3 plan storage, GitHub OIDC → STS role
+  assumption, Cognito Identity
 - **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
 - Comment commands: `nikama plan|apply|lock|unlock|help` (also `digger ...`; the wakeup word is configurable with `wakeup_word`), with `-p/--project`, `-d/--directory` and `plan --no-lock`; on a closed or merged PR only `unlock` is accepted
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
@@ -83,6 +84,22 @@ jobs:
           aws-region: ap-northeast-1
       - uses: kangaechu/tf-nikama@v0.2.0
         with:
+          upload-plan-destination: aws
+          upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+PR locks default to a DynamoDB table (`DiggerDynamoDBLockTable`, created on
+first use). To keep everything in S3 instead, set `lock-provider: s3` and
+`aws-lock-bucket`; the role then needs `s3:PutObject`, `s3:GetObject`,
+`s3:DeleteObject` and `s3:ListBucket` on that bucket and no DynamoDB
+permissions. Lock objects are created with `If-None-Match: *`, so two runs
+cannot both take the same project. The lock bucket can be the plan bucket.
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.2.0
+        with:
+          lock-provider: s3
+          aws-lock-bucket: my-lock-bucket
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
 ```
@@ -303,7 +320,7 @@ The action sets these for you; when running the binary directly:
 | `GITHUB_TOKEN`, `GITHUB_CONTEXT`, `GITHUB_REPOSITORY` | required for PR mode |
 | `INPUT_DIGGER_MODE` | `` / `manual` / `drift-detection` |
 | `INPUT_DIGGER_COMMAND`, `INPUT_DIGGER_PROJECT` | manual mode |
-| `LOCK_PROVIDER` (`aws`/`gcp`/`noop`), `NIKAMA_LOCK_TABLE`, `GOOGLE_STORAGE_LOCK_BUCKET`, `DISABLE_LOCKING` | PR locks |
+| `LOCK_PROVIDER` (`aws`/`s3`/`gcp`/`noop`), `NIKAMA_LOCK_TABLE`, `AWS_S3_LOCK_BUCKET`, `GOOGLE_STORAGE_LOCK_BUCKET`, `DISABLE_LOCKING` | PR locks |
 | `PLAN_UPLOAD_DESTINATION` (`aws`/`gcp`), `AWS_S3_BUCKET`, `PLAN_UPLOAD_S3_*`, `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` | plan storage |
 | `REPORTING_STRATEGY` | `comments_per_run` / `latest_run_comment` / `per_project` |
 | `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`, `INPUT_DRIFT_GITHUB_ISSUES` | drift notifications |
