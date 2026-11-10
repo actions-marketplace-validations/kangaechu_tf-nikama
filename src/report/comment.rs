@@ -258,11 +258,17 @@ impl RunReport {
             "<details><summary>{}</summary>\n\n```{}\n{}\n```\n",
             title, lang, body
         );
-        if let (Some(table), DetailKind::Plan) = (&row.summary_table, kind) {
-            if !table.is_empty() {
+        if let Some(table) = &row.summary_table {
+            let title = match kind {
+                DetailKind::Plan => Some("plan summary"),
+                // The plan produced right before an apply without plan storage.
+                DetailKind::Apply => Some("plan applied (planned immediately before apply)"),
+                DetailKind::Error => None,
+            };
+            if let (Some(title), false) = (title, table.is_empty()) {
                 s.push_str(&format!(
-                    "\n<details><summary>plan summary</summary>\n\n{}\n</details>\n",
-                    table
+                    "\n<details><summary>{}</summary>\n\n{}\n</details>\n",
+                    title, table
                 ));
             }
         }
