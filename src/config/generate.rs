@@ -6,10 +6,17 @@ use super::raw::RawGenerateProjects;
 use super::{ConfigError, Project, DEFAULT_WORKFLOW, DEFAULT_WORKSPACE};
 use std::path::Path;
 
-/// Directories (repository-relative) that contain at least one `*.tf` file.
-/// Directories named `modules` and hidden directories (`.terraform`, `.git`)
-/// are skipped. When `traverse_nested` is false, discovery does not descend
-/// into a directory that is itself a project.
+/// File extensions that make a directory a Terraform / OpenTofu root module.
+const IAC_EXTENSIONS: [&str; 2] = [".tf", ".tofu"];
+
+fn is_iac_file(name: &str) -> bool {
+    IAC_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+}
+
+/// Directories (repository-relative) that contain at least one `*.tf` or
+/// `*.tofu` file. Directories named `modules` and hidden directories
+/// (`.terraform`, `.git`) are skipped. When `traverse_nested` is false,
+/// discovery does not descend into a directory that is itself a project.
 pub fn discover_terraform_dirs(root: &Path, traverse_nested: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut walker = walkdir::WalkDir::new(root)
@@ -32,15 +39,15 @@ pub fn discover_terraform_dirs(root: &Path, traverse_nested: bool) -> Vec<String
             walker.skip_current_dir();
             continue;
         }
-        let has_tf = std::fs::read_dir(entry.path())
+        let has_iac = std::fs::read_dir(entry.path())
             .map(|rd| {
                 rd.filter_map(|e| e.ok()).any(|e| {
                     e.file_type().map(|t| t.is_file()).unwrap_or(false)
-                        && e.file_name().to_string_lossy().ends_with(".tf")
+                        && is_iac_file(&e.file_name().to_string_lossy())
                 })
             })
             .unwrap_or(false);
-        if has_tf {
+        if has_iac {
             let rel = entry
                 .path()
                 .strip_prefix(root)
@@ -64,15 +71,21 @@ fn dir_matches(dir: &str, include: Option<&str>, exclude: Option<&str>) -> bool 
     let Some(include) = include else {
         return false;
     };
-    // Try the directory itself and a representative file inside it so that
-    // both `dev/**` and `dev/**/*.tf`-style patterns work.
-    let probe_file = format!("{}/main.tf", dir);
+    // Try the directory itself and a representative file per supported
+    // extension inside it so that `dev/**`, `dev/**/*.tf` and
+    // `dev/**/*.tofu`-style patterns all work.
+    let probe_files: Vec<String> = IAC_EXTENSIONS
+        .iter()
+        .map(|ext| format!("{}/main{}", dir, ext))
+        .collect();
     let inc = vec![include.to_string()];
     let exc: Vec<String> = exclude.map(|s| vec![s.to_string()]).unwrap_or_default();
-    let included = matches_patterns(dir, &inc, &[]) || matches_patterns(&probe_file, &inc, &[]);
+    let included = matches_patterns(dir, &inc, &[])
+        || probe_files.iter().any(|f| matches_patterns(f, &inc, &[]));
     // `matches_patterns` with no includes returns true unless excluded.
     let excluded = !exc.is_empty()
-        && (!matches_patterns(dir, &[], &exc) || !matches_patterns(&probe_file, &[], &exc));
+        && (!matches_patterns(dir, &[], &exc)
+            || probe_files.iter().any(|f| !matches_patterns(f, &[], &exc)));
     included && !excluded
 }
 
@@ -221,5 +234,32 @@ mod tests {
         assert!(!dir_matches("dev/app", Some("dev/**"), Some("dev/app")));
         assert!(!dir_matches("dev/app", Some("dev/**"), Some("dev/app/**")));
         assert_eq!(project_name_for_dir("dev/vpc"), "dev_vpc");
+    }
+
+    #[test]
+    fn discovers_tofu_only_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("tofu/net")).unwrap();
+        std::fs::write(root.join("tofu/net/main.tofu"), "").unwrap();
+        std::fs::create_dir_all(root.join("mixed")).unwrap();
+        std::fs::write(root.join("mixed/main.tf"), "").unwrap();
+        std::fs::write(root.join("mixed/extra.tofu"), "").unwrap();
+        // Unrelated files do not make a project.
+        std::fs::create_dir_all(root.join("docs")).unwrap();
+        std::fs::write(root.join("docs/notes.tf.md"), "").unwrap();
+        std::fs::write(root.join("docs/plan.tofu.json"), "").unwrap();
+
+        let dirs = discover_terraform_dirs(root, true);
+        assert_eq!(dirs, vec!["mixed", "tofu/net"]);
+
+        // Extension-specific include patterns match for both extensions.
+        assert!(dir_matches("tofu/net", Some("tofu/**/*.tofu"), None));
+        assert!(dir_matches("tofu/net", Some("tofu/**/*.tf"), None));
+        assert!(!dir_matches(
+            "tofu/net",
+            Some("tofu/**/*.tofu"),
+            Some("**/*.tofu")
+        ));
     }
 }
