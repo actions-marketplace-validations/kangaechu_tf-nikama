@@ -1,5 +1,9 @@
 # tf-nikama
 
+<p align="center">
+  <img src="docs/images/tf-nikama.png" alt="tf-nikama logo: a steaming stainless pot of boiling tofu" width="400">
+</p>
+
 Backendless Terraform / OpenTofu automation for GitHub pull requests, as a single
 small binary that runs inside GitHub Actions.
 
