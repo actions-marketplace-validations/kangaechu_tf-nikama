@@ -1,8 +1,8 @@
 //! Orchestration tests: apply gating, summaries, dependency-level execution.
 
 use super::pr_event::{
-    acquire_locks, apply_gate, check_approved, check_required_statuses, check_undiverged,
-    required_checks, summarize, sweep_locks, ApplyGate,
+    acquire_locks, all_plans_empty, apply_gate, check_approved, check_required_statuses,
+    check_undiverged, required_checks, set_noop_statuses, summarize, sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -800,4 +800,100 @@ async fn sweep_releases_only_this_prs_other_locks() {
     assert_eq!(mem.holder("o/r#z").await.unwrap(), Some(2));
     assert_eq!(mem.holder("x/y#a").await.unwrap(), Some(1));
     assert!(!storage.exists("o-r-1-eks.tfplan").await.unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// Commit statuses when there is nothing to do (DESIGN.md §13).
+
+#[test]
+fn all_plans_empty_decisions() {
+    assert!(all_plans_empty(&[plan_result(true), plan_result(true)]));
+    assert!(!all_plans_empty(&[plan_result(true), plan_result(false)]));
+    // A failure anywhere disqualifies.
+    assert!(!all_plans_empty(&[
+        plan_result(true),
+        JobResult {
+            project: "b".into(),
+            command: Command::Plan,
+            outcome: Err("boom".into()),
+        }
+    ]));
+    // Lock / unlock jobs alongside empty plans are fine, but there must be
+    // at least one plan.
+    let unlocked = JobResult {
+        project: "c".into(),
+        command: Command::Unlock,
+        outcome: Ok(Outcome::Unlocked(true)),
+    };
+    assert!(all_plans_empty(&[plan_result(true), unlocked]));
+    assert!(!all_plans_empty(&[JobResult {
+        project: "c".into(),
+        command: Command::Unlock,
+        outcome: Ok(Outcome::Unlocked(true)),
+    }]));
+    assert!(!all_plans_empty(&[]));
+}
+
+#[tokio::test]
+async fn noop_statuses_set_plan_and_apply_to_success() {
+    use wiremock::matchers::body_partial_json;
+    let server = MockServer::start().await;
+    for context in ["digger/plan", "digger/apply"] {
+        Mock::given(method("POST"))
+            .and(path("/repos/o/r/statuses/abc"))
+            .and(body_partial_json(serde_json::json!({
+                "state": "success",
+                "context": context,
+                "description": "no impacted projects",
+                "target_url": "https://ci/run/1"
+            })))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({})))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let github = crate::github::GithubClient::new("t", "o", "r", Some(&server.uri()));
+    set_noop_statuses(&github, "abc", "no impacted projects", "https://ci/run/1").await;
+}
+
+#[tokio::test]
+async fn push_without_impacted_projects_expects_statuses() {
+    use super::pr_event::build_trigger;
+    use crate::github::{GithubClient, GithubContext};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/7/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"filename": "README.md"}
+        ])))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: infra/a\n", tmp.path()).unwrap();
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+    let ctx = |action: &str| {
+        GithubContext::parse(&format!(
+            r#"{{"event_name":"pull_request","actor":"me","repository":"o/r","run_id":"1","run_attempt":"1",
+                "event":{{"action":"{}","pull_request":{{"number":7,"draft":false,"merged":false,
+                "head":{{"ref":"feat","sha":"abc"}},"base":{{"ref":"main","sha":"def"}}}},
+                "repository":{{"default_branch":"main","full_name":"o/r"}},"sender":{{"login":"me"}}}}}}"#,
+            action
+        ))
+        .unwrap()
+    };
+    let t = build_trigger(&config, &ctx("synchronize"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert!(t.jobs.is_empty());
+    assert_eq!(t.impacted, 0);
+    assert_eq!(t.head_sha, "abc");
+    assert!(t.expects_plan_or_apply);
+    // Closing a PR is not a plan / apply event.
+    let t = build_trigger(&config, &ctx("closed"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert!(!t.expects_plan_or_apply);
+    assert!(t.release_all_locks);
 }

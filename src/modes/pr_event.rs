@@ -15,15 +15,22 @@ use crate::report::{ReportWriter, RowStatus, RunReport};
 use std::sync::Arc;
 
 pub(super) struct Trigger {
-    pr_number: u64,
-    jobs: Vec<Job>,
+    pub(super) pr_number: u64,
+    pub(super) jobs: Vec<Job>,
     /// Does the job set cover every impacted project? (needed for auto-merge)
-    covers_all_impacted: bool,
-    notes: Vec<String>,
-    comment_id: Option<u64>,
+    pub(super) covers_all_impacted: bool,
+    pub(super) notes: Vec<String>,
+    pub(super) comment_id: Option<u64>,
     /// Release every lock this PR holds, not only those of impacted projects
     /// (PR closed / merged, or a bare `digger unlock`).
-    release_all_locks: bool,
+    pub(super) release_all_locks: bool,
+    /// Head commit of the PR at the time of the event.
+    pub(super) head_sha: String,
+    /// Number of projects impacted by the PR.
+    pub(super) impacted: usize,
+    /// Would this event normally plan or apply? When it does and there is
+    /// nothing to do, the commit statuses are still set (DESIGN.md §13).
+    pub(super) expects_plan_or_apply: bool,
 }
 
 pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: GithubClient) -> i32 {
@@ -34,6 +41,17 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     };
     if trigger.jobs.is_empty() {
         tracing::info!("no jobs to run");
+        if trigger.expects_plan_or_apply {
+            // A required `digger/plan` or `digger/apply` check must not stay
+            // missing (or keep an older failure) just because this commit
+            // changes no infrastructure.
+            let description = if trigger.impacted == 0 {
+                "no impacted projects"
+            } else {
+                "nothing to run for this event"
+            };
+            set_noop_statuses(&github, &trigger.head_sha, description, &ctx.run_url()).await;
+        }
         let mut notes = trigger.notes.clone();
         if trigger.release_all_locks {
             // A PR that no longer impacts any project may still hold locks
@@ -274,6 +292,21 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         )
         .await;
 
+    // Nothing to apply: let a required `digger/apply` check pass. When any
+    // project has changes the apply context is left untouched, so it stays
+    // missing on this commit until an apply runs.
+    if main_command == Command::Plan && trigger.covers_all_impacted && all_plans_empty(&results) {
+        let _ = github
+            .set_status(
+                &pr.head_sha,
+                "success",
+                Command::Apply.status_context(),
+                "no changes to apply",
+                Some(&ctx.run_url()),
+            )
+            .await;
+    }
+
     write_outputs(trigger.pr_number);
 
     if !failed && applied > 0 && config.auto_merge && trigger.covers_all_impacted {
@@ -284,6 +317,42 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         exit::JOB_FAILED
     } else {
         exit::OK
+    }
+}
+
+/// `true` when every job succeeded, at least one was a plan, and no plan has
+/// changes (DESIGN.md §13: `digger/apply` may be set to success).
+pub(super) fn all_plans_empty(results: &[JobResult]) -> bool {
+    let mut plans = 0;
+    for r in results {
+        match &r.outcome {
+            Ok(Outcome::Plan(p)) if p.is_empty() => plans += 1,
+            Ok(Outcome::Plan(_)) => return false,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+    plans > 0
+}
+
+/// Set both `digger/plan` and `digger/apply` to success on `sha` for a run
+/// that has nothing to do.
+pub(super) async fn set_noop_statuses(
+    github: &GithubClient,
+    sha: &str,
+    description: &str,
+    run_url: &str,
+) {
+    for context in [
+        Command::Plan.status_context(),
+        Command::Apply.status_context(),
+    ] {
+        if let Err(e) = github
+            .set_status(sha, "success", context, description, Some(run_url))
+            .await
+        {
+            tracing::warn!(context, error = %e, "could not set commit status");
+        }
     }
 }
 
@@ -340,6 +409,9 @@ pub(super) async fn build_trigger(
                 notes: vec![],
                 comment_id: None,
                 release_all_locks,
+                head_sha: event.pull_request.head.sha.clone(),
+                impacted: impacted.len(),
+                expects_plan_or_apply: selector == PrSelector::Pushed,
             }))
         }
         "issue_comment" => {
@@ -419,6 +491,9 @@ pub(super) async fn build_trigger(
                 notes,
                 comment_id: Some(event.comment.id),
                 release_all_locks,
+                head_sha: pr.head_sha.clone(),
+                impacted: impacted.len(),
+                expects_plan_or_apply: matches!(command, Command::Plan | Command::Apply),
             }))
         }
         "merge_group" => {
