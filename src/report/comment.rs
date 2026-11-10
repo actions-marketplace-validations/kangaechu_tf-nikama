@@ -2,7 +2,7 @@
 
 use super::COMMENT_MAX_CHARS;
 use crate::config::ShowEmptyPlans;
-use crate::engine::{Command, PlanSummary};
+use crate::engine::{ApplySummary, Command, PlanSummary};
 use crate::util::truncate_chars;
 use std::collections::BTreeMap;
 
@@ -60,7 +60,7 @@ pub struct ProjectRow {
     pub name: String,
     pub status: RowStatus,
     pub plan_summary: Option<PlanSummary>,
-    pub apply_summary: Option<(u32, u32, u32)>,
+    pub apply_summary: Option<ApplySummary>,
     pub detail_kind: Option<DetailKind>,
     pub detail: Option<String>,
     pub summary_table: Option<String>,
@@ -151,52 +151,62 @@ impl RunReport {
 
     fn table(&self) -> String {
         let is_apply = matches!(self.command, Command::Apply | Command::Destroy);
-        let mut s = String::new();
-        if is_apply {
-            s.push_str("| Project | Status | + | ~ | - |\n|---|---|---|---|---|\n");
-        } else {
-            s.push_str("| Project | Status | + | ~ | - | ± |\n|---|---|---|---|---|---|\n");
-        }
-        for row in self.rows.values() {
-            if self.show_empty_plans == ShowEmptyPlans::Hide && row.status == RowStatus::NoChanges {
-                continue;
-            }
+        let visible = || {
+            self.rows.values().filter(|row| {
+                !(self.show_empty_plans == ShowEmptyPlans::Hide
+                    && row.status == RowStatus::NoChanges)
+            })
+        };
+        // The import column is only shown when some project imports a
+        // resource, so the usual layout stays unchanged.
+        let with_import = visible().any(|row| {
             if is_apply {
-                let (a, c, d) = row
-                    .apply_summary
-                    .map(|(a, c, d)| (a.to_string(), c.to_string(), d.to_string()))
-                    .unwrap_or_default();
-                s.push_str(&format!(
-                    "| {} | {} | {} | {} | {} |\n",
-                    row.name,
-                    row.status.label(),
-                    a,
-                    c,
-                    d
-                ));
+                row.apply_summary.is_some_and(|a| a.imported > 0)
             } else {
-                let (c, u, d, r) = row
-                    .plan_summary
+                row.plan_summary.as_ref().is_some_and(|p| p.import > 0)
+            }
+        });
+        let mut s = String::new();
+        let mut cols: Vec<&str> = if is_apply {
+            vec!["+", "~", "-"]
+        } else {
+            vec!["+", "~", "-", "±"]
+        };
+        if with_import {
+            cols.push("↓");
+        }
+        s.push_str(&format!("| Project | Status | {} |\n", cols.join(" | ")));
+        s.push_str(&format!("|---|---|{}\n", "---|".repeat(cols.len())));
+        for row in visible() {
+            let mut cells: Vec<String> = if is_apply {
+                row.apply_summary
+                    .map(|a| {
+                        let mut v = vec![a.added, a.changed, a.destroyed];
+                        if with_import {
+                            v.push(a.imported);
+                        }
+                        v.iter().map(u32::to_string).collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                row.plan_summary
                     .as_ref()
                     .map(|p| {
-                        (
-                            p.create.to_string(),
-                            p.update.to_string(),
-                            p.delete.to_string(),
-                            p.replace.to_string(),
-                        )
+                        let mut v = vec![p.create, p.update, p.delete, p.replace];
+                        if with_import {
+                            v.push(p.import);
+                        }
+                        v.iter().map(u32::to_string).collect()
                     })
-                    .unwrap_or_default();
-                s.push_str(&format!(
-                    "| {} | {} | {} | {} | {} | {} |\n",
-                    row.name,
-                    row.status.label(),
-                    c,
-                    u,
-                    d,
-                    r
-                ));
-            }
+                    .unwrap_or_default()
+            };
+            cells.resize(cols.len(), String::new());
+            s.push_str(&format!(
+                "| {} | {} | {} |\n",
+                row.name,
+                row.status.label(),
+                cells.join(" | ")
+            ));
         }
         s
     }
@@ -394,6 +404,26 @@ mod tests {
         // Empty plans do not get a details block.
         assert!(!body.contains("<b>net</b>"));
         assert!(body.contains("`digger apply`"));
+    }
+
+    #[test]
+    fn import_column_only_when_imports_exist() {
+        let mut r = report();
+        assert!(r.render()[0].contains("| Project | Status | + | ~ | - | ± |\n"));
+        {
+            let row = r.row_mut("iam");
+            row.status = RowStatus::Changes;
+            row.plan_summary = Some(PlanSummary {
+                import: 67,
+                ..Default::default()
+            });
+        }
+        let body = r.render().remove(0);
+        assert!(body.contains("| Project | Status | + | ~ | - | ± | ↓ |\n"));
+        assert!(body.contains("|---|---|---|---|---|---|---|\n"));
+        assert!(body.contains("| iam | 🟡 changes | 0 | 0 | 0 | 0 | 67 |"));
+        assert!(body.contains("| app | 🟡 changes | 2 | 1 | 0 | 0 | 0 |"));
+        assert!(body.contains("| net | ✅ no changes |  |  |  |  |  |"));
     }
 
     #[test]

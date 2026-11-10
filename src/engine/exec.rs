@@ -1,7 +1,9 @@
 //! Executes a job's plan / apply / destroy stages.
 
 use super::output::{cleanup_apply_output, cleanup_plan_output};
-use super::plan_json::{apply_summary_from_output, plan_summary_from_json, PlanSummary};
+use super::plan_json::{
+    apply_summary_from_output, plan_summary_from_json, ApplySummary, PlanSummary,
+};
 use super::runner::{run_streaming, CmdOutput, IacRunner};
 use super::Job;
 use crate::config::Step;
@@ -55,8 +57,8 @@ impl PlanResult {
 #[derive(Debug, Clone)]
 pub struct ApplyResult {
     pub output: String,
-    /// `(added, changed, destroyed)` when parseable.
-    pub summary: Option<(u32, u32, u32)>,
+    /// Resource counts when parseable.
+    pub summary: Option<ApplySummary>,
     pub additional_output: Option<String>,
     pub steps: Vec<StepLog>,
 }

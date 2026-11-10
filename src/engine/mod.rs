@@ -8,7 +8,7 @@ mod plan_json;
 mod runner;
 
 pub use exec::{ApplyResult, ExecError, JobExecutor, PlanResult};
-pub use plan_json::{plan_summary_table, PlanSummary};
+pub use plan_json::{plan_summary_table, ApplySummary, PlanSummary};
 pub use runner::IacTool;
 
 use crate::config::{Project, Workflow};

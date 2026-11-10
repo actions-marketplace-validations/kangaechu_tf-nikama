@@ -9,6 +9,9 @@ pub struct PlanSummary {
     pub update: u32,
     pub delete: u32,
     pub replace: u32,
+    /// Resources brought under management by `import` blocks. An import may
+    /// also carry an update, which is counted in `update` as well.
+    pub import: u32,
     pub output_changes: u32,
     /// Per-resource rows: (address, action label).
     pub rows: Vec<(String, String)>,
@@ -20,14 +23,28 @@ impl PlanSummary {
             && self.update == 0
             && self.delete == 0
             && self.replace == 0
+            && self.import == 0
             && self.output_changes == 0
     }
     pub fn short(&self) -> String {
-        format!(
+        let mut s = format!(
             "+{} ~{} -{} ±{}",
             self.create, self.update, self.delete, self.replace
-        )
+        );
+        if self.import > 0 {
+            s.push_str(&format!(" ↓{}", self.import));
+        }
+        s
     }
+}
+
+/// `(imported, added, changed, destroyed)` parsed from apply or destroy output.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ApplySummary {
+    pub imported: u32,
+    pub added: u32,
+    pub changed: u32,
+    pub destroyed: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +65,9 @@ struct ResourceChange {
 struct Change {
     #[serde(default)]
     actions: Vec<String>,
+    /// Present when the resource is being imported (`import` block).
+    #[serde(default)]
+    importing: Option<serde_json::Value>,
 }
 
 fn classify(actions: &[String]) -> Option<&'static str> {
@@ -68,7 +88,8 @@ pub fn plan_summary_from_json(json: &str) -> Result<PlanSummary, serde_json::Err
     let plan: TfPlan = serde_json::from_str(json)?;
     let mut s = PlanSummary::default();
     for rc in &plan.resource_changes {
-        if let Some(kind) = classify(&rc.change.actions) {
+        let kind = classify(&rc.change.actions);
+        if let Some(kind) = kind {
             match kind {
                 "create" => s.create += 1,
                 "update" => s.update += 1,
@@ -76,8 +97,18 @@ pub fn plan_summary_from_json(json: &str) -> Result<PlanSummary, serde_json::Err
                 "replace" => s.replace += 1,
                 _ => {}
             }
-            s.rows.push((rc.address.clone(), kind.to_string()));
         }
+        let importing = rc.change.importing.is_some();
+        if importing {
+            s.import += 1;
+        }
+        let label = match (importing, kind) {
+            (true, None) => "import".to_string(),
+            (true, Some(k)) => format!("import+{}", k),
+            (false, Some(k)) => k.to_string(),
+            (false, None) => continue,
+        };
+        s.rows.push((rc.address.clone(), label));
     }
     for c in plan.output_changes.values() {
         if classify(&c.actions).is_some() {
@@ -94,14 +125,18 @@ pub fn plan_summary_table(summary: &PlanSummary) -> String {
     }
     let mut out = String::from("| Resource | Action |\n|---|---|\n");
     for (addr, action) in &summary.rows {
-        let sym = match action.as_str() {
-            "create" => "➕ create",
-            "update" => "🔄 update",
-            "delete" => "❌ delete",
-            "replace" => "♻️ replace",
-            other => other,
-        };
-        out.push_str(&format!("| `{}` | {} |\n", addr, sym));
+        let sym: Vec<&str> = action
+            .split('+')
+            .map(|a| match a {
+                "create" => "➕ create",
+                "update" => "🔄 update",
+                "delete" => "❌ delete",
+                "replace" => "♻️ replace",
+                "import" => "📥 import",
+                other => other,
+            })
+            .collect();
+        out.push_str(&format!("| `{}` | {} |\n", addr, sym.join(", ")));
     }
     if summary.output_changes > 0 {
         out.push_str(&format!(
@@ -112,13 +147,17 @@ pub fn plan_summary_table(summary: &PlanSummary) -> String {
     out
 }
 
-/// `(added, changed, destroyed)` parsed from apply or destroy output; the
-/// last match wins. Handles both `Resources: 1 added, 2 changed, 3 destroyed`
-/// and the destroy form `Resources: 3 destroyed`.
-pub fn apply_summary_from_output(output: &str) -> Option<(u32, u32, u32)> {
+/// Summary parsed from apply or destroy output; the last match wins. Handles
+/// `Resources: 1 added, 2 changed, 3 destroyed`, the import form
+/// `Resources: 4 imported, 1 added, 2 changed, 3 destroyed` and the destroy
+/// form `Resources: 3 destroyed`.
+pub fn apply_summary_from_output(output: &str) -> Option<ApplySummary> {
     static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = RE.get_or_init(|| {
-        regex::Regex::new(r"Resources: (?:(\d+) added, (\d+) changed, )?(\d+) destroyed").unwrap()
+        regex::Regex::new(
+            r"Resources: (?:(\d+) imported, )?(?:(\d+) added, (\d+) changed, )?(\d+) destroyed",
+        )
+        .unwrap()
     });
     let mut last = None;
     for cap in re.captures_iter(output) {
@@ -127,7 +166,12 @@ pub fn apply_summary_from_output(output: &str) -> Option<(u32, u32, u32)> {
                 .and_then(|m| m.as_str().parse().ok())
                 .unwrap_or(0)
         };
-        last = Some((num(1), num(2), num(3)));
+        last = Some(ApplySummary {
+            imported: num(1),
+            added: num(2),
+            changed: num(3),
+            destroyed: num(4),
+        });
     }
     last
 }
@@ -158,6 +202,25 @@ mod tests {
     }
 
     #[test]
+    fn counts_imports() {
+        let json = r#"{
+          "resource_changes": [
+            {"address": "aws_iam_role.a", "change": {"actions": ["no-op"], "importing": {"id": "a"}}},
+            {"address": "aws_iam_role.b", "change": {"actions": ["update"], "importing": {"id": "b"}}},
+            {"address": "aws_iam_role.c", "change": {"actions": ["no-op"]}}
+          ]
+        }"#;
+        let s = plan_summary_from_json(json).unwrap();
+        assert_eq!((s.import, s.update, s.create), (2, 1, 0));
+        assert!(!s.is_empty());
+        assert_eq!(s.short(), "+0 ~1 -0 ±0 ↓2");
+        let table = plan_summary_table(&s);
+        assert!(table.contains("| `aws_iam_role.a` | 📥 import |"));
+        assert!(table.contains("| `aws_iam_role.b` | 📥 import, 🔄 update |"));
+        assert!(!table.contains("aws_iam_role.c"));
+    }
+
+    #[test]
     fn empty_plan() {
         let s = plan_summary_from_json(
             r#"{"resource_changes": [{"address":"a","change":{"actions":["no-op"]}}]}"#,
@@ -172,12 +235,29 @@ mod tests {
             apply_summary_from_output(
                 "Apply complete! Resources: 1 added, 2 changed, 3 destroyed."
             ),
-            Some((1, 2, 3))
+            Some(ApplySummary {
+                imported: 0,
+                added: 1,
+                changed: 2,
+                destroyed: 3
+            })
         );
         assert_eq!(apply_summary_from_output("nothing"), None);
         assert_eq!(
             apply_summary_from_output("Destroy complete! Resources: 4 destroyed."),
-            Some((0, 0, 4))
+            Some(ApplySummary {
+                destroyed: 4,
+                ..Default::default()
+            })
+        );
+        assert_eq!(
+            apply_summary_from_output(
+                "Apply complete! Resources: 67 imported, 0 added, 0 changed, 0 destroyed."
+            ),
+            Some(ApplySummary {
+                imported: 67,
+                ..Default::default()
+            })
         );
     }
 }

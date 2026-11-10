@@ -246,7 +246,13 @@ async fn plan_apply_destroy_roundtrip() {
         .apply(Some(&plan.plan_file))
         .await
         .expect("apply succeeds");
-    assert_eq!(apply.summary, Some((1, 0, 0)));
+    assert_eq!(
+        apply.summary,
+        Some(ApplySummary {
+            added: 1,
+            ..Default::default()
+        })
+    );
     assert!(apply.output.contains("Apply complete!"));
 
     let exec = executor(&f, &plan_job);
@@ -261,7 +267,13 @@ async fn plan_apply_destroy_roundtrip() {
     let destroy_job = job(&f, Command::Destroy);
     let exec = executor(&f, &destroy_job);
     let destroyed = exec.destroy().await.expect("destroy succeeds");
-    assert_eq!(destroyed.summary, Some((0, 0, 1)));
+    assert_eq!(
+        destroyed.summary,
+        Some(ApplySummary {
+            destroyed: 1,
+            ..Default::default()
+        })
+    );
 }
 
 #[tokio::test]
