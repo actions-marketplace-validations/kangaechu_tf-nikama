@@ -76,7 +76,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::123456789012:role/nikama
           aws-region: ap-northeast-1
-      - uses: kangaechu/tf-nikama@v0.1.3
+      - uses: kangaechu/tf-nikama@v0.2.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -91,7 +91,7 @@ On Google Cloud, replace the AWS credentials step with
         with:
           workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
           service_account: nikama@my-project.iam.gserviceaccount.com
-      - uses: kangaechu/tf-nikama@v0.1.3
+      - uses: kangaechu/tf-nikama@v0.2.0
         with:
           lock-provider: gcp
           google-lock-bucket: my-lock-bucket
