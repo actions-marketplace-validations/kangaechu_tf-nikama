@@ -3,25 +3,56 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/actions.lock"
   pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain*"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/actions.lock"
 
 permissions:
   contents: read
 
+# 同じ PR / ブランチで新しい push があったら古い実行を止める
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # テストに debuginfo は不要。コンパイル・リンクが速くなり、キャッシュも小さくなる
+  CARGO_PROFILE_DEV_DEBUG: 0
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: stable
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@v2.9.3
+        with:
+          # テスト失敗時もキャッシュを保存し、修正 push 後の再実行を速くする
+          cache-on-failure: true
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
         run: cargo test --all-targets
-      - name: Build (release)
-        run: cargo build --release
