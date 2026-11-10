@@ -48,7 +48,7 @@ scope for the foreseeable future.
 name: nikama
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed, ready_for_review]
+    types: [opened, synchronize, reopened, closed, ready_for_review, converted_to_draft]
   issue_comment:
     types: [created]
 
@@ -126,6 +126,11 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 
 1. The event is mapped to commands using each project's
    `workflow_configuration` (defaults: push → `digger plan`, close / merge → `digger unlock`).
+   With `allow_draft_prs: false` (the default) a draft pull request runs
+   nothing and takes no locks: pushes to it are ignored, converting an open
+   pull request to a draft releases its locks (`converted_to_draft`), and
+   comment commands other than `digger unlock` are refused until it is marked
+   ready for review.
 2. Impacted projects are computed from the PR's changed files
    (`dir/**`, `include_patterns`, `exclude_patterns`, plus downstream
    `depends_on` projects in `hard` mode).
