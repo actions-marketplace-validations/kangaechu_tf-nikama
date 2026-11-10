@@ -289,6 +289,7 @@ clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マ
   - `-d <dir>` / `--directory <dir>`: 複数指定可
   - 指定なしは影響プロジェクト全件
 - 影響プロジェクトに含まれない名前を指定した場合はコメントで警告し、残りを実行する（現行はエラー終了）。
+- PR が closed（merged を含む）なら `unlock` 以外のコマンドは拒否し、その旨を短くコメントして exit 0（現行は PR の状態を見ずに実行する）。merged PR への apply は `on_commit_to_default` の役割。`unlock` は残留ロックの回収手段なので常に受け付ける。
 - `digger help` はコマンド一覧をコメントして exit 0 で終了する（現行は影響プロジェクトがあると exit 7 になる）。
 - コメントに 👀 リアクションを付ける（受理の可視化。失敗しても続行）。
 

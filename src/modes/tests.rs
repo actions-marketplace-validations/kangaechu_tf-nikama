@@ -2,7 +2,8 @@
 
 use super::pr_event::{
     acquire_locks, all_plans_empty, apply_gate, check_approved, check_required_statuses,
-    check_undiverged, required_checks, set_noop_statuses, summarize, sweep_locks, ApplyGate,
+    check_undiverged, closed_pr_rejection, required_checks, set_noop_statuses, summarize,
+    sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -896,4 +897,76 @@ async fn push_without_impacted_projects_expects_statuses() {
         .expect("trigger");
     assert!(!t.expects_plan_or_apply);
     assert!(t.release_all_locks);
+}
+
+#[test]
+fn comment_commands_on_closed_prs() {
+    let open = pr(false, "open", Some(true), Some("clean"));
+    let closed = pr(false, "closed", None, None);
+    let merged = pr(true, "closed", None, None);
+    for c in [
+        Command::Plan,
+        Command::Apply,
+        Command::Lock,
+        Command::Unlock,
+    ] {
+        assert!(closed_pr_rejection(&open, c).is_none(), "{:?}", c);
+    }
+    let r = closed_pr_rejection(&closed, Command::Plan).unwrap();
+    assert!(r.contains("is closed"), "{}", r);
+    assert!(r.contains("`plan`"), "{}", r);
+    assert!(r.contains("`nikama unlock`"), "{}", r);
+    let r = closed_pr_rejection(&merged, Command::Apply).unwrap();
+    assert!(r.contains("is merged"), "{}", r);
+    assert!(closed_pr_rejection(&merged, Command::Lock).is_some());
+    // Unlock is always accepted.
+    assert!(closed_pr_rejection(&closed, Command::Unlock).is_none());
+    assert!(closed_pr_rejection(&merged, Command::Unlock).is_none());
+}
+
+#[tokio::test]
+async fn plan_comment_on_merged_pr_is_rejected_with_a_comment() {
+    use super::pr_event::build_trigger;
+    use crate::github::{GithubClient, GithubContext};
+    use wiremock::matchers::body_string_contains;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/7"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "head": {"ref": "feat", "sha": "abc"}, "base": {"ref": "main", "sha": "def"},
+            "user": {"login": "alice"},
+            "merged": true, "state": "closed", "draft": false
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/7/comments"))
+        .and(body_string_contains("this pull request is merged"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": 1})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+    let ctx = GithubContext::parse(
+        r#"{"event_name":"issue_comment","actor":"me","repository":"o/r","run_id":"1","run_attempt":"1",
+            "event":{"action":"created","issue":{"number":7,"pull_request":{}},
+            "comment":{"id":99,"body":"digger plan"},
+            "repository":{"default_branch":"main","full_name":"o/r"},"sender":{"login":"me"}}}"#,
+    )
+    .unwrap();
+    let result = build_trigger(&config, &ctx, &github).await;
+    assert!(
+        matches!(result, Ok(None)),
+        "{:?}",
+        result.map(|t| t.is_some())
+    );
+    // The changed-files endpoint was never called: rejection happens first.
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| !r.url.path().ends_with("/files")));
 }

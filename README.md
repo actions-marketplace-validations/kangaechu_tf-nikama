@@ -28,7 +28,7 @@ Supported in the first release:
 - **AWS**: DynamoDB PR locks (schema-compatible with Digger), S3 plan storage,
   GitHub OIDC → STS role assumption, Cognito Identity
 - **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
-- Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project` and `-d/--directory`
+- Comment commands: `digger plan|apply|lock|unlock|help` (also `nikama ...`), with `-p/--project` and `-d/--directory`; on a closed or merged PR only `unlock` is accepted
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
 - Drift detection with Slack webhook or GitHub Issue notifications
 
