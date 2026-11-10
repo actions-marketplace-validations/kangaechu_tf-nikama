@@ -98,6 +98,8 @@ concurrency:
 See [`examples/nikama.yml`](examples/nikama.yml) for the full schema and
 [`docs/DESIGN.md`](docs/DESIGN.md) for the design.
 
+Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
+
 ## How a run works
 
 1. The event is mapped to commands using each project's
