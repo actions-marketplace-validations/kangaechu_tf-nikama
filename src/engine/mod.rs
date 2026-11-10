@@ -5,6 +5,7 @@ mod exec;
 mod exec_tests;
 mod output;
 mod plan_json;
+pub mod providers;
 mod runner;
 
 pub use exec::{ApplyResult, ExecError, JobExecutor, PlanResult};

@@ -79,6 +79,9 @@ pub struct JobExecutor<'a> {
     pub init_lock: Option<Arc<Mutex<()>>>,
     /// Use a per-job `TF_DATA_DIR` (needed when several projects share a dir).
     pub isolate_data_dir: bool,
+    /// Terraform CLI configuration enforcing the provider allowlist, written
+    /// to the work dir and passed through `TF_CLI_CONFIG_FILE` when set.
+    pub cli_config: Option<String>,
 }
 
 impl<'a> JobExecutor<'a> {
@@ -94,7 +97,23 @@ impl<'a> JobExecutor<'a> {
         self.work_dir.join("additional-output.log")
     }
 
-    fn runner(&self, filter_regex: Option<&str>) -> IacRunner {
+    /// Write the CLI configuration for this job, if there is one, and return
+    /// its path.
+    pub(crate) fn cli_config_file(&self) -> Result<Option<PathBuf>, ExecError> {
+        let Some(text) = &self.cli_config else {
+            return Ok(None);
+        };
+        let path = self.work_dir.join("cli-config.tfrc");
+        std::fs::write(&path, text).map_err(|e| ExecError {
+            step: "init".into(),
+            message: format!("could not write {}: {}", path.display(), e),
+            stdout: String::new(),
+            stderr: String::new(),
+        })?;
+        Ok(Some(path))
+    }
+
+    fn runner(&self, filter_regex: Option<&str>) -> Result<IacRunner, ExecError> {
         let filter = filter_regex.and_then(|r| regex::Regex::new(r).ok());
         let mut base_env = BTreeMap::new();
         if self.isolate_data_dir {
@@ -106,14 +125,20 @@ impl<'a> JobExecutor<'a> {
                     .to_string(),
             );
         }
-        IacRunner {
+        if let Some(p) = self.cli_config_file()? {
+            base_env.insert(
+                "TF_CLI_CONFIG_FILE".to_string(),
+                p.to_string_lossy().to_string(),
+            );
+        }
+        Ok(IacRunner {
             tool: self.job.tool(),
             working_dir: self.project_path(),
             workspace: self.job.project.workspace.clone(),
             log_prefix: format!("[{}]", self.job.project.name),
             filter,
             base_env,
-        }
+        })
     }
 
     fn run_env(&self, plan_file: Option<&Path>) -> BTreeMap<String, String> {
@@ -150,9 +175,14 @@ impl<'a> JobExecutor<'a> {
             .await
             .map_err(|e| io_err("init", e))?;
         if !out.success() {
+            let hint = if self.cli_config.is_some() {
+                " (allowed-providers is set: a provider outside the list cannot be installed)"
+            } else {
+                ""
+            };
             return Err(ExecError {
                 step: "init".into(),
-                message: format!("exit code {}", out.exit_code),
+                message: format!("exit code {}{}", out.exit_code, hint),
                 stdout: out.stdout,
                 stderr: out.stderr,
             });
@@ -221,7 +251,7 @@ impl<'a> JobExecutor<'a> {
     pub async fn plan(&self) -> Result<PlanResult, ExecError> {
         std::fs::create_dir_all(&self.work_dir).map_err(|e| io_err("plan", e))?;
         let stage = &self.job.workflow.plan;
-        let runner = self.runner(stage.filter_regex.as_deref());
+        let runner = self.runner(stage.filter_regex.as_deref())?;
         let plan_file = self.plan_file();
         let mut steps = Vec::new();
         let mut plan_stdout: Option<String> = None;
@@ -321,7 +351,7 @@ impl<'a> JobExecutor<'a> {
     pub async fn apply(&self, plan_file: Option<&Path>) -> Result<ApplyResult, ExecError> {
         std::fs::create_dir_all(&self.work_dir).map_err(|e| io_err("apply", e))?;
         let stage = &self.job.workflow.apply;
-        let runner = self.runner(stage.filter_regex.as_deref());
+        let runner = self.runner(stage.filter_regex.as_deref())?;
         let mut steps = Vec::new();
         let mut output = String::new();
         let mut summary = None;
@@ -369,7 +399,7 @@ impl<'a> JobExecutor<'a> {
     /// `init` then `destroy` (stages are not configurable for destroy).
     pub async fn destroy(&self) -> Result<ApplyResult, ExecError> {
         std::fs::create_dir_all(&self.work_dir).map_err(|e| io_err("destroy", e))?;
-        let runner = self.runner(self.job.workflow.apply.filter_regex.as_deref());
+        let runner = self.runner(self.job.workflow.apply.filter_regex.as_deref())?;
         let init_args = match self.job.workflow.apply.steps.first() {
             Some(Step::Init { extra_args }) => extra_args.clone(),
             _ => vec![],

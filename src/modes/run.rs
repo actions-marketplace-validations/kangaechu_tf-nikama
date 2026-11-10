@@ -25,6 +25,9 @@ pub struct RunContext {
     /// plans and checked before applying a stored plan; `None` outside PR
     /// mode.
     pub head_sha: Option<String>,
+    /// Terraform CLI configuration enforcing the provider allowlist, when
+    /// one is configured (see `engine::providers`).
+    pub cli_config: Option<String>,
 }
 
 impl RunContext {
@@ -45,6 +48,7 @@ impl RunContext {
             work_dir: self.work_root.join(sanitize(&job.project.name)),
             init_lock: self.init_lock.clone(),
             isolate_data_dir: shared_dir,
+            cli_config: self.cli_config.clone(),
         }
     }
 

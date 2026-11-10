@@ -31,6 +31,10 @@ pub struct RawConfig {
     pub drift_exclude_patterns: Vec<String>,
     pub concurrency: Option<RawConcurrency>,
     pub comment: Option<RawComment>,
+    /// Provider source-address patterns this configuration wants to allow.
+    /// Can only narrow the `allowed-providers` workflow input.
+    #[serde(default)]
+    pub allowed_providers: Vec<String>,
 
     // ---- unsupported keys (backend-only or unused in Digger) ----
     pub respect_layers: Option<Value>,

@@ -204,6 +204,7 @@ What changed and why:
 | `github-token` | `github-token` | Unchanged. |
 | (none) | `max-parallel`, `log-level`, `version` | New. |
 | (none) | `config-ref`, `allow-run-steps` | New. Read `nikama.yml` from a trusted ref on PR runs / refuse `run:` steps (README "Trusting the configuration"). |
+| (none) | `allowed-providers` | New. Only the listed Terraform providers can be installed (README "Restricting providers"). |
 
 ### Manual and drift workflows
 

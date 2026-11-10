@@ -46,6 +46,8 @@ pub struct Env {
     pub work_root: PathBuf,
     pub max_parallel: Option<usize>,
     pub serialize_init: bool,
+    /// Terraform CLI configuration enforcing the provider allowlist, if any.
+    pub cli_config: Option<String>,
 }
 
 impl Env {
@@ -181,6 +183,13 @@ pub async fn run() -> i32 {
         workflows = config.workflows.len(),
         "configuration loaded"
     );
+    let cli_config = match provider_cli_config(&config) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, "allowed-providers error");
+            return exit::CONFIG;
+        }
+    };
     if args.validate {
         print_projects(&config);
         return exit::OK;
@@ -217,6 +226,7 @@ pub async fn run() -> i32 {
         work_root,
         max_parallel: args.max_parallel,
         serialize_init,
+        cli_config,
     };
 
     match mode.as_str() {
@@ -303,6 +313,48 @@ fn load_local_config(args: &Args, repo_root: &std::path::Path) -> Result<config:
             }
         }
     }
+}
+
+/// Build the Terraform CLI configuration for the provider allowlist from the
+/// `allowed-providers` input (`NIKAMA_ALLOWED_PROVIDERS`) and the
+/// configuration's `allowed_providers`. `None` when neither is set.
+fn provider_cli_config(config: &Config) -> anyhow::Result<Option<String>> {
+    use crate::engine::providers;
+    let input = match crate::util::env_opt("NIKAMA_ALLOWED_PROVIDERS") {
+        Some(s) => {
+            let list = providers::parse_list(&s).map_err(|e| anyhow::anyhow!(e))?;
+            if list.is_empty() {
+                None
+            } else {
+                Some(list)
+            }
+        }
+        None => None,
+    };
+    let Some(allowlist) = providers::effective(input.as_deref(), &config.allowed_providers)
+        .map_err(|e| anyhow::anyhow!(e))?
+    else {
+        return Ok(None);
+    };
+    tracing::info!(
+        providers = %allowlist.patterns.join(", "),
+        source = allowlist.source,
+        "provider allowlist in effect; other providers cannot be installed"
+    );
+    let existing = providers::existing_cli_config().map_err(|e| {
+        anyhow::anyhow!(
+            "could not read the existing Terraform CLI configuration: {}",
+            e
+        )
+    })?;
+    if existing.is_some() {
+        tracing::info!(
+            "existing Terraform CLI configuration is kept and extended with the allowlist"
+        );
+    }
+    providers::cli_config(&allowlist.patterns, existing.as_deref())
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!(e))
 }
 
 /// `config-ref` value → git ref. `default` means the repository's default

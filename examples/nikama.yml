@@ -73,3 +73,9 @@ concurrency:
 comment:
   mode: single        # single | per_project | latest
   show_empty_plans: table
+
+# Providers this configuration may install. Only narrows the workflow's
+# `allowed-providers` input; entries outside it are ignored.
+allowed_providers:
+  - hashicorp/aws
+  - hashicorp/random

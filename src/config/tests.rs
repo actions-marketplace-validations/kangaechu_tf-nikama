@@ -510,3 +510,27 @@ fn run_steps_are_listed_and_can_be_forbidden() {
     assert!(plain.run_steps().is_empty());
     assert!(plain.check_run_steps(false).is_ok());
 }
+
+#[test]
+fn allowed_providers_are_normalised_and_validated() {
+    let c = load(
+        "projects:\n  - name: a\n    dir: a\nallowed_providers:\n  - hashicorp/AWS\n  - registry.terraform.io/hashicorp/aws\n  - app.terraform.io/org/*\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.allowed_providers,
+        vec![
+            "registry.terraform.io/hashicorp/aws",
+            "app.terraform.io/org/*"
+        ]
+    );
+    let msg = err_msg(load(
+        "projects:\n  - name: a\n    dir: a\nallowed_providers: [aws]\n",
+    ));
+    assert!(msg.contains("allowed_providers"), "{}", msg);
+    assert!(msg.contains("invalid provider pattern 'aws'"), "{}", msg);
+    assert!(load("projects:\n  - name: a\n    dir: a\n")
+        .unwrap()
+        .allowed_providers
+        .is_empty());
+}

@@ -64,6 +64,7 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
         writer: None,
         max_parallel: 1,
         head_sha: None,
+        cli_config: env.cli_config.clone(),
     });
     let result = run_job(&ctx, job).await;
     match result.outcome {
