@@ -12,6 +12,8 @@ type Update = Box<dyn FnOnce(&mut RunReport) + Send + 'static>;
 enum Msg {
     Update(Update),
     Flush(oneshot::Sender<()>),
+    /// Publish any pending changes and stop the writer task.
+    Close(oneshot::Sender<()>),
 }
 
 #[derive(Clone)]
@@ -61,10 +63,18 @@ impl ReportWriter {
         }
     }
 
-    /// Mark the report finished and publish it.
+    /// Mark the report finished, publish it and stop the writer task.
+    ///
+    /// The task must be stopped explicitly: it would otherwise only exit once
+    /// every `ReportWriter` clone is dropped, and callers (e.g. `RunContext`)
+    /// still hold clones when they `join()` the task, which would deadlock.
+    /// Updates queued after `finish` are dropped.
     pub async fn finish(&self) {
         self.update(|r| r.finished = true);
-        self.flush().await;
+        let (tx, rx) = oneshot::channel();
+        if self.tx.send(Msg::Close(tx)).is_ok() {
+            let _ = rx.await;
+        }
     }
 }
 
@@ -203,6 +213,16 @@ async fn run(
                     let _ = p.send(());
                 }
                 let _ = tx.send(());
+            }
+            Some(Msg::Close(tx)) => {
+                if dirty {
+                    publisher.publish(&report).await;
+                }
+                for p in pending_flush.drain(..) {
+                    let _ = p.send(());
+                }
+                let _ = tx.send(());
+                break;
             }
             None => {
                 if dirty {
