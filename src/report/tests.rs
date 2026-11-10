@@ -210,6 +210,52 @@ async fn writer_reuses_existing_comment_with_marker() {
 }
 
 #[tokio::test]
+async fn writer_finish_stops_task_while_clones_are_alive() {
+    // Regression: `RunContext` keeps a `ReportWriter` clone alive while the
+    // caller joins the task. Without an explicit close message the task
+    // waits for the channel to close and `join()` never returns.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/issues/5/comments"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/5/comments"))
+        .respond_with(
+            ResponseTemplate::new(201).set_body_json(json!({"id": 9, "body": "", "html_url": ""})),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/repos/o/r/issues/comments/9"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 9})))
+        .expect(1..)
+        .mount(&server)
+        .await;
+
+    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table);
+    report.row_mut("p");
+    let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
+    let held_clone = writer.clone();
+    writer.update(|r| r.row_mut("p").status = RowStatus::NoChanges);
+    writer.finish().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), task.join())
+        .await
+        .expect("writer task must stop after finish() even while clones are alive");
+    // Updates after finish are dropped silently rather than panicking.
+    held_clone.update(|r| r.row_mut("p").status = RowStatus::Changes);
+    held_clone.flush().await;
+
+    let reqs = server.received_requests().await.unwrap();
+    let patches: Vec<_> = reqs.iter().filter(|r| r.method == "PATCH").collect();
+    let last: serde_json::Value = serde_json::from_slice(&patches.last().unwrap().body).unwrap();
+    let body = last["body"].as_str().unwrap();
+    assert!(body.contains("| p |"));
+    assert!(!body.contains("· running"));
+}
+
+#[tokio::test]
 async fn writer_per_project_mode_creates_one_comment_per_project() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
