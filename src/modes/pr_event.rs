@@ -952,10 +952,31 @@ pub(super) fn check_blocked(
     }
 }
 
+/// Split reviews into those by users with write access and the logins whose
+/// reviews are ignored. Branch protection ignores reviews from everyone
+/// else, so a pull request author cannot approve their own PR from a
+/// second account.
+pub(super) fn trusted_reviews(
+    reviews: &[crate::github::client::ReviewInfo],
+    has_write: impl Fn(&str) -> bool,
+) -> (Vec<crate::github::client::ReviewInfo>, Vec<String>) {
+    let mut kept = Vec::new();
+    let mut ignored: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for r in reviews {
+        if has_write(&r.user) {
+            kept.push(r.clone());
+        } else {
+            ignored.insert(r.user.clone());
+        }
+    }
+    (kept, ignored.into_iter().collect())
+}
+
 /// `approved` requirement: the latest non-dismissed review of every reviewer
 /// other than the PR author is considered; at least one must be `APPROVED`
 /// and none may be `CHANGES_REQUESTED`. `COMMENTED` / `PENDING` reviews do not
-/// change a reviewer's verdict.
+/// change a reviewer's verdict. Callers filter the reviews with
+/// [`trusted_reviews`] first.
 pub(super) fn check_approved(
     reviews: &[crate::github::client::ReviewInfo],
     author: &str,
@@ -1039,7 +1060,36 @@ async fn apply_allowed(
                 .list_reviews(pr.number)
                 .await
                 .map_err(|e| format!("could not list reviews: {}", e))?;
-            if let Err(reason) = check_approved(&reviews, &pr.author) {
+            // Only reviews from users with write access count, as with
+            // branch protection. One permission lookup per reviewer.
+            let mut writers: std::collections::BTreeMap<String, bool> = Default::default();
+            for user in reviews.iter().map(|r| r.user.as_str()) {
+                if user == pr.author || writers.contains_key(user) {
+                    continue;
+                }
+                let role = github.collaborator_role(user).await.map_err(|e| {
+                    format!(
+                        "could not check the repository permission of reviewer {}: {}",
+                        user, e
+                    )
+                })?;
+                writers.insert(user.to_string(), has_write_access(&role));
+            }
+            let (trusted, ignored) =
+                trusted_reviews(&reviews, |u| writers.get(u).copied().unwrap_or(false));
+            if !ignored.is_empty() {
+                tracing::info!(
+                    users = %ignored.join(", "),
+                    "ignoring reviews from users without write access"
+                );
+            }
+            if let Err(mut reason) = check_approved(&trusted, &pr.author) {
+                if !ignored.is_empty() {
+                    reason.push_str(&format!(
+                        " (reviews from users without write access are ignored: {})",
+                        ignored.join(", ")
+                    ));
+                }
                 reasons.push(reason);
             }
         }

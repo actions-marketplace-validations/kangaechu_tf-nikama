@@ -212,6 +212,26 @@ fn approved_requirement() {
 }
 
 #[test]
+fn reviews_from_users_without_write_access_are_ignored() {
+    use super::pr_event::trusted_reviews;
+    let reviews = [
+        review("bob", "APPROVED"),
+        review("eve", "APPROVED"),
+        review("eve", "CHANGES_REQUESTED"),
+        review("mallory", "CHANGES_REQUESTED"),
+    ];
+    let (kept, ignored) = trusted_reviews(&reviews, |u| u == "bob");
+    assert_eq!(kept, vec![review("bob", "APPROVED")]);
+    assert_eq!(ignored, vec!["eve", "mallory"]);
+    // The sock-puppet approval alone does not satisfy the requirement ...
+    let (kept, _) = trusted_reviews(&reviews[1..2], |_| false);
+    assert!(check_approved(&kept, "author").is_err());
+    // ... and a read-only user's "changes requested" does not block either.
+    let (kept, _) = trusted_reviews(&reviews, |u| u == "bob");
+    assert!(check_approved(&kept, "author").is_ok());
+}
+
+#[test]
 fn undiverged_requirement() {
     assert!(check_undiverged(&CompareInfo {
         ahead_by: 3,
