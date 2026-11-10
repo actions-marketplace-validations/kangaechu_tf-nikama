@@ -253,10 +253,12 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                         std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
                         (p, None)
                     }
-                    Ok(None) => return Err(format!(
-                        "no stored plan found for this pull request ({}); run `nikama plan` first",
-                        job.plan_file_name()
-                    )),
+                    Ok(None) => {
+                        return Err(format!(
+                            "no stored plan found for this pull request ({}); run `nikama plan` first",
+                            job.plan_file_name()
+                        ));
+                    }
                     Err(e) => return Err(format!("could not retrieve stored plan: {}", e)),
                 }
             };
