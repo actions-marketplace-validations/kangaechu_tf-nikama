@@ -1232,7 +1232,6 @@ async fn auto_merge(github: &GithubClient, config: &Config, pr_number: u64) {
             pr_number,
             config.auto_merge_strategy.as_github_method(),
             &pr.head_sha,
-            "auto-merge",
         )
         .await
     {
