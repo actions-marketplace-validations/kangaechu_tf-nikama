@@ -22,6 +22,9 @@ pub trait Lock: Send + Sync {
     async fn unlock(&self, resource: &str) -> anyhow::Result<bool>;
     /// PR number currently holding `resource`, if any.
     async fn holder(&self, resource: &str) -> anyhow::Result<Option<u64>>;
+    /// Resources whose name starts with `prefix` (`<owner>/<repo>#`) and
+    /// whose holder is `pr`.
+    async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>>;
     fn name(&self) -> &'static str;
 }
 
@@ -38,6 +41,9 @@ impl Lock for NoopLock {
     }
     async fn holder(&self, _resource: &str) -> anyhow::Result<Option<u64>> {
         Ok(None)
+    }
+    async fn held_by(&self, _pr: u64, _prefix: &str) -> anyhow::Result<Vec<String>> {
+        Ok(vec![])
     }
     fn name(&self) -> &'static str {
         "noop"
@@ -85,6 +91,17 @@ pub enum LockOutcome {
     HeldByOther(u64),
 }
 
+/// Who holds a resource, from the point of view of one PR, without taking it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HolderStatus {
+    /// Nobody, or a closed PR whose lock can be taken over.
+    Free,
+    /// This PR.
+    Ours,
+    /// Another open PR.
+    Other(u64),
+}
+
 /// PR-lock semantics on top of a `Lock` backend: a lock held by a closed PR
 /// is taken over; a lock held by an open PR blocks.
 pub struct PrLocker {
@@ -109,6 +126,21 @@ impl PrLocker {
         let closed = self.github.get_pr(pr).await?.is_closed();
         self.closed_cache.lock().await.insert(pr, closed);
         Ok(closed)
+    }
+
+    /// Look at the holder of `resource` without acquiring it.
+    pub async fn status(&self, pr: u64, resource: &str) -> anyhow::Result<HolderStatus> {
+        match self.backend.holder(resource).await? {
+            None => Ok(HolderStatus::Free),
+            Some(h) if h == pr => Ok(HolderStatus::Ours),
+            Some(h) if self.is_pr_closed(h).await? => Ok(HolderStatus::Free),
+            Some(h) => Ok(HolderStatus::Other(h)),
+        }
+    }
+
+    /// Resources under `prefix` held by `pr`.
+    pub async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>> {
+        self.backend.held_by(pr, prefix).await
     }
 
     pub async fn lock(&self, pr: u64, resource: &str) -> anyhow::Result<LockOutcome> {
@@ -149,5 +181,64 @@ impl PrLocker {
             return Ok(false);
         }
         self.backend.unlock(resource).await
+    }
+}
+
+/// In-memory lock backend shared by the unit tests of this crate.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::Lock;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use tokio::sync::Mutex;
+
+    #[derive(Default)]
+    pub(crate) struct MemLock {
+        pub(crate) held: Mutex<HashMap<String, u64>>,
+    }
+
+    impl MemLock {
+        pub(crate) fn holding(entries: &[(&str, u64)]) -> Self {
+            let m = Self::default();
+            let mut h = m.held.try_lock().unwrap();
+            for (r, pr) in entries {
+                h.insert(r.to_string(), *pr);
+            }
+            drop(h);
+            m
+        }
+    }
+
+    #[async_trait]
+    impl Lock for MemLock {
+        async fn lock(&self, pr: u64, resource: &str) -> anyhow::Result<bool> {
+            let mut h = self.held.lock().await;
+            match h.get(resource) {
+                Some(holder) if *holder != pr => Ok(false),
+                _ => {
+                    h.insert(resource.to_string(), pr);
+                    Ok(true)
+                }
+            }
+        }
+        async fn unlock(&self, resource: &str) -> anyhow::Result<bool> {
+            Ok(self.held.lock().await.remove(resource).is_some())
+        }
+        async fn holder(&self, resource: &str) -> anyhow::Result<Option<u64>> {
+            Ok(self.held.lock().await.get(resource).copied())
+        }
+        async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>> {
+            let h = self.held.lock().await;
+            let mut v: Vec<String> = h
+                .iter()
+                .filter(|(r, p)| **p == pr && r.starts_with(prefix))
+                .map(|(r, _)| r.clone())
+                .collect();
+            v.sort();
+            Ok(v)
+        }
+        fn name(&self) -> &'static str {
+            "mem"
+        }
     }
 }

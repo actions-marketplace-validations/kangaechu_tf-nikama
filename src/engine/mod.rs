@@ -141,11 +141,16 @@ impl Job {
 
     /// `<owner>-<repo>[-<pr>]-<project>.tfplan` — the stored plan key.
     pub fn plan_file_name(&self) -> String {
-        let ns = self.namespace.replace('/', "-");
-        match self.pr_number {
-            Some(pr) => format!("{}-{}-{}.tfplan", ns, pr, self.project.name),
-            None => format!("{}-{}.tfplan", ns, self.project.name),
-        }
+        plan_file_name(&self.namespace, self.pr_number, &self.project.name)
+    }
+}
+
+/// Stored plan key for a project (see [`Job::plan_file_name`]).
+pub fn plan_file_name(namespace: &str, pr_number: Option<u64>, project: &str) -> String {
+    let ns = namespace.replace('/', "-");
+    match pr_number {
+        Some(pr) => format!("{}-{}-{}.tfplan", ns, pr, project),
+        None => format!("{}-{}.tfplan", ns, project),
     }
 }
 

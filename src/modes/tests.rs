@@ -1,8 +1,8 @@
 //! Orchestration tests: apply gating, summaries, dependency-level execution.
 
 use super::pr_event::{
-    apply_gate, check_approved, check_required_statuses, check_undiverged, required_checks,
-    summarize, ApplyGate,
+    acquire_locks, apply_gate, check_approved, check_required_statuses, check_undiverged,
+    required_checks, summarize, sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -603,4 +603,201 @@ async fn unhandled_events_are_a_noop() {
             result.map(|t| t.is_some())
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Lock acquisition (DESIGN.md §9.3) and the dangling-lock sweep (§9.2).
+
+use crate::lock::testing::MemLock;
+use crate::lock::{Lock, PrLocker};
+use crate::report::RowStatus;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+async fn mock_pr_state(server: &MockServer, number: u64, state: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/o/r/pulls/{}", number)))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "head": {"ref": "x", "sha": "s"}, "base": {"ref": "main", "sha": "b"},
+            "merged": false, "state": state, "draft": false
+        })))
+        .mount(server)
+        .await;
+}
+
+fn pr_locker(server: &MockServer, backend: Arc<dyn Lock>) -> PrLocker {
+    PrLocker::new(
+        backend,
+        crate::github::GithubClient::new("t", "o", "r", Some(&server.uri())),
+    )
+}
+
+/// Jobs for projects a, b, c (configuration order) of PR 1 in `o/r`.
+fn abc_jobs(command: Command) -> Vec<Job> {
+    let tmp = tempfile::tempdir().unwrap();
+    let c = load_from_str(
+        "projects:\n  - name: a\n    dir: a\n  - name: b\n    dir: b\n  - name: c\n    dir: c\n",
+        tmp.path(),
+    )
+    .unwrap();
+    c.projects
+        .iter()
+        .map(|p| {
+            Job::new(
+                p,
+                c.workflow_for(p),
+                command,
+                Some(1),
+                "x",
+                "me",
+                "o/r",
+                "",
+                "",
+            )
+        })
+        .collect()
+}
+
+fn names(jobs: &[Job]) -> Vec<&str> {
+    jobs.iter().map(|j| j.project.name.as_str()).collect()
+}
+
+#[tokio::test]
+async fn locks_all_free_are_all_taken() {
+    let server = MockServer::start().await;
+    let mem = Arc::new(MemLock::default());
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    assert!(!plan.failed);
+    assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
+    assert!(plan.rows.is_empty());
+    for r in ["o/r#a", "o/r#b", "o/r#c"] {
+        assert_eq!(mem.holder(r).await.unwrap(), Some(1));
+    }
+}
+
+#[tokio::test]
+async fn locks_held_by_another_pr_block_new_acquisition() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    let mem = Arc::new(MemLock::holding(&[("o/r#b", 2)]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    assert!(plan.failed);
+    assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
+    let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
+    assert_eq!(rows[0].0, "a");
+    assert!(matches!(rows[0].1, RowStatus::Skipped(r) if r == "lock not taken: b is locked by #2"));
+    assert_eq!(rows[1], ("b", &RowStatus::LockedByOther(2)));
+    assert!(matches!(rows[2].1, RowStatus::Skipped(_)));
+    // Nothing was taken for PR 1; PR 2 keeps its lock.
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), None);
+    assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn locks_already_ours_still_run_when_others_are_blocked() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    let mem = Arc::new(MemLock::holding(&[("o/r#a", 1), ("o/r#b", 2)]));
+    let locker = pr_locker(&server, mem.clone());
+    let mut jobs = abc_jobs(Command::Plan);
+    jobs.push({
+        let mut j = jobs[2].clone();
+        j.command = Command::Unlock;
+        j
+    });
+    let plan = acquire_locks(&locker, 1, jobs).await;
+    assert!(plan.failed);
+    // `a` is held from an earlier run, the unlock job needs no lock.
+    assert_eq!(names(&plan.runnable), vec!["a", "c"]);
+    assert_eq!(plan.runnable[1].command, Command::Unlock);
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), None);
+}
+
+/// Backend that looks free but refuses to hand out one resource, simulating
+/// another PR taking it between the check and the acquisition.
+struct RaceLock {
+    inner: MemLock,
+    race_on: String,
+    other: u64,
+    tripped: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl Lock for RaceLock {
+    async fn lock(&self, pr: u64, resource: &str) -> anyhow::Result<bool> {
+        if resource == self.race_on {
+            self.tripped
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+            return Ok(false);
+        }
+        self.inner.lock(pr, resource).await
+    }
+    async fn unlock(&self, resource: &str) -> anyhow::Result<bool> {
+        self.inner.unlock(resource).await
+    }
+    async fn holder(&self, resource: &str) -> anyhow::Result<Option<u64>> {
+        if resource == self.race_on && self.tripped.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(Some(self.other));
+        }
+        self.inner.holder(resource).await
+    }
+    async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>> {
+        self.inner.held_by(pr, prefix).await
+    }
+    fn name(&self) -> &'static str {
+        "race"
+    }
+}
+
+#[tokio::test]
+async fn lost_race_releases_locks_taken_in_this_run() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    let race = Arc::new(RaceLock {
+        inner: MemLock::default(),
+        race_on: "o/r#b".into(),
+        other: 2,
+        tripped: Default::default(),
+    });
+    let locker = pr_locker(&server, race.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan)).await;
+    assert!(plan.failed);
+    assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
+    let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
+    assert_eq!(rows[0], ("b", &RowStatus::LockedByOther(2)));
+    assert!(
+        matches!(rows[1], ("a", RowStatus::Skipped(r)) if r == "lock released: b is locked by #2")
+    );
+    assert!(
+        matches!(rows[2], ("c", RowStatus::Skipped(r)) if r == "lock not taken: b is locked by #2")
+    );
+    // `a` was taken and given back; `c` was never attempted.
+    assert_eq!(race.inner.holder("o/r#a").await.unwrap(), None);
+    assert_eq!(race.inner.holder("o/r#c").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn sweep_releases_only_this_prs_other_locks() {
+    let server = MockServer::start().await;
+    let mem = Arc::new(MemLock::holding(&[
+        ("o/r#a", 1),
+        ("o/r#eks", 1),
+        ("o/r#z", 2),
+        ("x/y#a", 1),
+    ]));
+    let locker = pr_locker(&server, mem.clone());
+    let storage = MemoryStorage::with("o-r-1-eks.tfplan", Some("sha"));
+    let released = sweep_locks(&locker, &storage, 1, "o/r", &["o/r#a".to_string()])
+        .await
+        .unwrap();
+    assert_eq!(released, vec!["eks".to_string()]);
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
+    assert_eq!(mem.holder("o/r#eks").await.unwrap(), None);
+    assert_eq!(mem.holder("o/r#z").await.unwrap(), Some(2));
+    assert_eq!(mem.holder("x/y#a").await.unwrap(), Some(1));
+    assert!(!storage.exists("o-r-1-eks.tfplan").await.unwrap());
 }

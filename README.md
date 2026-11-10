@@ -127,8 +127,12 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    `depends_on` projects in `hard` mode).
 3. One run comment is posted immediately with every project as *pending*, and
    the commit status is set to *pending*.
-4. PR locks are acquired for all projects up front; projects locked by another
-   open PR are reported and skipped.
+4. PR locks are checked for all projects up front and taken in configuration
+   order. If any project is held by another open PR, no new lock is taken:
+   the held projects are reported as *locked by #N*, the others as skipped,
+   and only projects this PR already holds still run. On close / merge and
+   on a bare `digger unlock`, every lock the PR still holds is released, not
+   only those of the currently impacted projects.
 5. Before an apply, each project's `apply_requirements` are checked against
    the PR: `mergeable` (GitHub reports the PR as mergeable), `approved` (at
    least one approving review from someone other than the author and no

@@ -69,6 +69,22 @@ impl Lock for GcsLock {
         })
     }
 
+    async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>> {
+        let wanted = pr.to_string();
+        Ok(self
+            .client
+            .list(&self.bucket, prefix)
+            .await?
+            .into_iter()
+            .filter(|o| {
+                o.metadata
+                    .get(LOCK_ID_KEY)
+                    .is_some_and(|v| v.trim() == wanted)
+            })
+            .map(|o| o.name)
+            .collect())
+    }
+
     fn name(&self) -> &'static str {
         "gcs"
     }

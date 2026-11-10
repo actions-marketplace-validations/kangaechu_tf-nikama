@@ -190,6 +190,48 @@ impl Lock for DynamoDbLock {
         Ok(Some(tid))
     }
 
+    async fn held_by(&self, pr: u64, prefix: &str) -> anyhow::Result<Vec<String>> {
+        self.ensure_table().await?;
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut out = Vec::new();
+        let mut start_key = None;
+        loop {
+            let res = self
+                .client
+                .query()
+                .table_name(&self.table)
+                .consistent_read(true)
+                .key_condition_expression("PK = :pk AND begins_with(SK, :prefix)")
+                .filter_expression("transaction_id = :pr")
+                .expression_attribute_values(":pk", AttributeValue::S(PK.to_string()))
+                .expression_attribute_values(":prefix", AttributeValue::S(Self::sk(prefix)))
+                .expression_attribute_values(":pr", AttributeValue::N(pr.to_string()))
+                .set_exclusive_start_key(start_key)
+                .send()
+                .await
+                .map_err(|e| anyhow::anyhow!("dynamodb query failed: {}", e))?;
+            for item in res.items() {
+                let expired = item
+                    .get("timeout")
+                    .and_then(|v| v.as_s().ok())
+                    .is_some_and(|t| t.as_str() < now.as_str());
+                if expired {
+                    continue;
+                }
+                if let Some(sk) = item.get("SK").and_then(|v| v.as_s().ok()) {
+                    if let Some(resource) = sk.strip_prefix("RES#") {
+                        out.push(resource.to_string());
+                    }
+                }
+            }
+            match res.last_evaluated_key() {
+                Some(k) if !k.is_empty() => start_key = Some(k.clone()),
+                _ => break,
+            }
+        }
+        Ok(out)
+    }
+
     fn name(&self) -> &'static str {
         "dynamodb"
     }
