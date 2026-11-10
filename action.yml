@@ -28,15 +28,19 @@ inputs:
     required: false
     default: ""
   lock-provider:
-    description: "`aws` (DynamoDB, default) or `noop`"
+    description: "`aws` (DynamoDB, default), `gcp` (Cloud Storage bucket) or `noop`"
     required: false
     default: "aws"
   lock-table:
     description: "DynamoDB table for PR locks"
     required: false
     default: "DiggerDynamoDBLockTable"
+  google-lock-bucket:
+    description: "Cloud Storage bucket for PR locks when lock-provider is gcp"
+    required: false
+    default: ""
   upload-plan-destination:
-    description: "`aws` to store plan files in S3, empty to disable"
+    description: "`aws` to store plan files in S3, `gcp` for Cloud Storage, empty to disable"
     required: false
     default: ""
   upload-plan-destination-s3-bucket:
@@ -53,6 +57,10 @@ inputs:
     default: "AES256"
   upload-plan-destination-s3-encryption-kms-key-id:
     description: "KMS key id when encryption type is KMS"
+    required: false
+    default: ""
+  upload-plan-destination-gcp-bucket:
+    description: "Cloud Storage bucket for plan files when upload-plan-destination is gcp"
     required: false
     default: ""
   reporting-strategy:
@@ -143,11 +151,13 @@ runs:
         NIKAMA_LOG_LEVEL: ${{ inputs.log-level }}
         LOCK_PROVIDER: ${{ inputs.lock-provider }}
         NIKAMA_LOCK_TABLE: ${{ inputs.lock-table }}
+        GOOGLE_STORAGE_LOCK_BUCKET: ${{ inputs.google-lock-bucket }}
         PLAN_UPLOAD_DESTINATION: ${{ inputs.upload-plan-destination }}
         AWS_S3_BUCKET: ${{ inputs.upload-plan-destination-s3-bucket }}
         PLAN_UPLOAD_S3_ENCRYPTION_ENABLED: ${{ inputs.upload-plan-destination-s3-encryption-enabled }}
         PLAN_UPLOAD_S3_ENCRYPTION_TYPE: ${{ inputs.upload-plan-destination-s3-encryption-type }}
         PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID: ${{ inputs.upload-plan-destination-s3-encryption-kms-key-id }}
+        GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET: ${{ inputs.upload-plan-destination-gcp-bucket }}
         REPORTING_STRATEGY: ${{ inputs.reporting-strategy }}
         INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL: ${{ inputs.drift-detection-slack-notification-url }}
         NIKAMA_DRIFT_GITHUB_ISSUES: ${{ inputs.drift-github-issues }}

@@ -1,7 +1,9 @@
 //! Plan file storage between the plan and apply runs.
 
+mod gcs;
 mod s3;
 
+pub use gcs::GcsPlanStorage;
 pub use s3::S3PlanStorage;
 
 use async_trait::async_trait;
@@ -44,7 +46,8 @@ impl PlanStorage for NoopPlanStorage {
     }
 }
 
-/// Create the plan storage from `PLAN_UPLOAD_DESTINATION`.
+/// Create the plan storage from `PLAN_UPLOAD_DESTINATION` (`aws`, `gcp` or
+/// empty).
 pub async fn from_env() -> anyhow::Result<Arc<dyn PlanStorage>> {
     let dest = crate::util::env_opt("PLAN_UPLOAD_DESTINATION")
         .unwrap_or_default()
@@ -73,8 +76,19 @@ pub async fn from_env() -> anyhow::Result<Arc<dyn PlanStorage>> {
             };
             Ok(Arc::new(S3PlanStorage::new(&bucket, encryption).await?))
         }
-        "github" | "gcp" | "azure" | "gitlab" => anyhow::bail!(
-            "PLAN_UPLOAD_DESTINATION={} is not supported by this tool (only aws or empty)",
+        "gcp" | "gcs" => {
+            let bucket = crate::util::env_opt("GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET")
+                .map(|b| b.trim().to_ascii_lowercase())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET is required when PLAN_UPLOAD_DESTINATION=gcp"
+                    )
+                })?;
+            let client = crate::gcs::GcsClient::from_env()?;
+            Ok(Arc::new(GcsPlanStorage::new(client, &bucket)))
+        }
+        "github" | "azure" | "gitlab" => anyhow::bail!(
+            "PLAN_UPLOAD_DESTINATION={} is not supported by this tool (only aws, gcp or empty)",
             dest
         ),
         other => anyhow::bail!("unknown PLAN_UPLOAD_DESTINATION '{}'", other),

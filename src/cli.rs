@@ -78,6 +78,7 @@ fn init_logging(level: &str) {
         .add_directive("aws_smithy_runtime=warn".parse().unwrap())
         .add_directive("aws_runtime=warn".parse().unwrap())
         .add_directive("reqwest=warn".parse().unwrap())
+        .add_directive("google_cloud_auth=warn".parse().unwrap())
         .add_directive("rustls=warn".parse().unwrap());
     tracing_subscriber::fmt()
         .with_env_filter(filter)

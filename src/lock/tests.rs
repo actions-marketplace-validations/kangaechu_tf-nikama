@@ -129,7 +129,18 @@ async fn from_env_selection() {
     std::env::set_var("LOCK_PROVIDER", "noop");
     assert_eq!(from_env(true).await.unwrap().name(), "noop");
 
+    std::env::remove_var("GOOGLE_STORAGE_LOCK_BUCKET");
     std::env::set_var("LOCK_PROVIDER", "gcp");
+    let err = from_env(true).await.err().unwrap().to_string();
+    assert!(err.contains("GOOGLE_STORAGE_LOCK_BUCKET"), "{}", err);
+
+    std::env::set_var("GOOGLE_STORAGE_LOCK_BUCKET", "Locks");
+    std::env::set_var("STORAGE_EMULATOR_HOST", "localhost:1");
+    assert_eq!(from_env(true).await.unwrap().name(), "gcs");
+    std::env::remove_var("STORAGE_EMULATOR_HOST");
+    std::env::remove_var("GOOGLE_STORAGE_LOCK_BUCKET");
+
+    std::env::set_var("LOCK_PROVIDER", "azure");
     let err = from_env(true).await.err().unwrap().to_string();
     assert!(err.contains("not supported"), "{}", err);
 

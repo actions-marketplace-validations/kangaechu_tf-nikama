@@ -10,6 +10,7 @@ mod aws_auth;
 mod cli;
 mod config;
 mod engine;
+mod gcs;
 mod github;
 mod lock;
 mod modes;

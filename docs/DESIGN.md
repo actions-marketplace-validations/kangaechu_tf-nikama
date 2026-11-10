@@ -39,8 +39,8 @@ Digger のバックエンドレスモード（`no-backend: true`）は、GitHub 
 | IaC | Terraform、OpenTofu |
 | 実行モード | PR イベント、manual（workflow_dispatch）、drift-detection（schedule） |
 | コマンド | `digger plan`、`digger apply`、`digger lock`、`digger unlock`、`digger help`、manual のみ `digger destroy` |
-| PR ロック | DynamoDB、NoOp |
-| Plan ストレージ | S3（SSE-S3 / SSE-KMS）、なし |
+| PR ロック | DynamoDB、GCS（オブジェクト + `LockId` メタデータ）、NoOp |
+| Plan ストレージ | S3（SSE-S3 / SSE-KMS）、GCS、なし |
 | AWS 認証 | GitHub OIDC → STS AssumeRoleWithWebIdentity、Cognito Identity 経由、`-backend-config` 注入方式 |
 | レポート | PR コメント（単一コメント upsert）、commit status、Drift の Slack webhook / GitHub Issue |
 | 設定 | digger.yml の対応キー（§5） |
@@ -52,7 +52,7 @@ Digger のバックエンドレスモード（`no-backend: true`）は、GitHub 
 | バックエンド連携 | オーケストレータ、`DIGGER_RUN_SPEC`、`DIGGER_TOKEN`/`DIGGER_HOSTNAME`、ジョブ状態報告 | 恒久的に対象外 |
 | 他 VCS | GitLab、Bitbucket、Azure DevOps、GitHub Enterprise Server | GHE は将来候補 |
 | 他 IaC | Terragrunt（自動検出・実行とも）、Pulumi | 必要になった時点で追加 |
-| 他クラウド | GCP（GCS ロック・ストレージ）、Azure（Table ロック・Blob） | |
+| 他クラウド | Azure（Table ロック・Blob） | GCP（GCS ロック・ストレージ）は追加済み |
 | GitHub Artifacts による plan 保存 | 現行は非推奨 v3 API と `wget` 依存 | 将来 v4 API で再検討 |
 | ポリシー | OPA / rego 評価、管理リポジトリ | CE バックエンドレスでは元々 NoOp（全許可） |
 | テレメトリ | analytics.digger.dev への送信 | 実装しない |
@@ -72,8 +72,9 @@ src/
   config/            nikama.yml のパース（raw.rs）・既定値と検証（convert.rs）・プロジェクト生成（generate.rs）・影響判定（impact.rs）・依存グラフ（graph.rs）
   github/            GITHUB_CONTEXT のパース（context.rs）、REST クライアント（client.rs）、コメントコマンド解析（comment_cmd.rs）、イベント→ジョブ変換（events.rs）
   engine/            Job / Command モデル、Terraform/OpenTofu ランナー（runner.rs）、ステージ実行（exec.rs）、出力整形（output.rs）、plan JSON 集計（plan_json.rs）
-  lock/              Lock trait、DynamoDB 実装、NoOp 実装、PR ロックのセマンティクス（PrLocker）
-  storage/           PlanStorage trait、S3 実装、なし実装
+  lock/              Lock trait、DynamoDB 実装、GCS 実装、NoOp 実装、PR ロックのセマンティクス（PrLocker）
+  storage/           PlanStorage trait、S3 実装、GCS 実装、なし実装
+  gcs/               GCS JSON API の最小クライアント（ADC 認証、lock/storage で共用）
   aws_auth.rs        GitHub OIDC トークン取得、STS、Cognito、認証戦略
   report/            コメントモデルとレンダリング（comment.rs）、単一ライター（writer.rs）、Drift 通知（drift.rs）
   modes/             PR イベント（pr_event.rs）、manual、drift、共通のジョブ実行（run.rs）
@@ -97,7 +98,7 @@ trait Lock {                 // DynamoDb, NoOp
     async fn holder(&self, resource: &str) -> Result<Option<u64>>;
 }
 
-trait PlanStorage {          // S3, Noop
+trait PlanStorage {          // S3, GCS, Noop
     async fn store(&self, key: &str, bytes: &[u8]) -> Result<()>;
     async fn retrieve(&self, key: &str) -> Result<Option<Vec<u8>>>;
     async fn delete(&self, key: &str) -> Result<()>;
@@ -113,9 +114,9 @@ trait DriftNotifier {        // SlackWebhook, GithubIssue
 
 ### 3.3 主要 Rust 依存（想定）
 
-clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マッチ）、petgraph、tokio、reqwest（rustls）、regex、tracing、aws-config、aws-sdk-dynamodb、aws-sdk-s3、aws-sdk-sts、aws-sdk-cognitoidentity。
+clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マッチ）、petgraph、tokio、reqwest（rustls）、regex、tracing、aws-config、aws-sdk-dynamodb、aws-sdk-s3、aws-sdk-sts、aws-sdk-cognitoidentity、google-cloud-auth（ADC 認証のみ。GCS は JSON API を reqwest で直接呼ぶ）。
 
-クラウド SDK が AWS だけなので、リリースバイナリは 10〜20 MB 台を目標とする。
+クラウド SDK は AWS と Google の認証ライブラリだけなので、リリースバイナリは 10〜20 MB 台を目標とする。
 
 ---
 
@@ -473,14 +474,16 @@ plan と同じく `max_parallel` で並列。通知は完了順ではなくプ�
 
 ### 9.4 環境変数
 
-- `LOCK_PROVIDER`: `aws`（既定）または `noop`。現行と同名。`gcp` / `azure` はエラー。
+- `LOCK_PROVIDER`: `aws`（既定）、`gcp` または `noop`。現行と同名。`azure` はエラー。
+- GCS ロック（`gcp`）: `GOOGLE_STORAGE_LOCK_BUCKET` のバケットに resource 名（`<owner>/<repo>#<project>`）のオブジェクトを作り、カスタムメタデータ `LockId` に PR 番号を持つ（現行互換）。作成は `ifGenerationMatch=0` 付きで原子的に行う（現行は無条件上書き）。認証は ADC（`GOOGLE_APPLICATION_CREDENTIALS`、`google-github-actions/auth` が書く WIF ファイルを含む）。
 - AWS 認証は既定クレデンシャルチェーン（`aws-actions/configure-aws-credentials` が設定した環境変数）。`AWS_REGION` 必須。
 
 ---
 
 ## 10. Plan ストレージ
 
-- `PLAN_UPLOAD_DESTINATION`: `aws` または空（なし）。`github` / `gcp` / `azure` はエラー。
+- `PLAN_UPLOAD_DESTINATION`: `aws`、`gcp` または空（なし）。`github` / `azure` はエラー。
+- GCS: `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET`（現行と同名）。暗号化オプションはなし（バケット既定に従う）。
 - S3: `AWS_S3_BUCKET`、`PLAN_UPLOAD_S3_ENCRYPTION_ENABLED`、`PLAN_UPLOAD_S3_ENCRYPTION_TYPE` (`AES256` / `KMS`)、`PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID`。現行と同名。
 - キー: `<owner>-<repo>-<pr>-<project>.tfplan`（現行互換）。
 - plan 後に保存、apply 前に取得、unlock 時に削除。
@@ -646,10 +649,11 @@ nikama [--config PATH] [--max-parallel N] [--log-level LEVEL] [--repo-root DIR] 
 | `INPUT_DIGGER_BLOCK_FILTERS` | 任意 | drift のブロック絞り込み |
 | `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`、`INPUT_DRIFT_GITHUB_ISSUES` | drift 時いずれか必須 | |
 | `NIKAMA_CONFIG`（互換: `DIGGER_FILENAME`） | 任意 | 設定ファイルパス |
-| `LOCK_PROVIDER` | 任意 | `aws`（既定）/ `noop` |
+| `LOCK_PROVIDER` | 任意 | `aws`（既定）/ `gcp` / `noop` |
 | `DISABLE_LOCKING` | 任意 | `true` で NoOp |
 | `NIKAMA_LOCK_TABLE` | 任意 | DynamoDB テーブル名（独自、既定 `DiggerDynamoDBLockTable`） |
-| `PLAN_UPLOAD_DESTINATION`、`AWS_S3_BUCKET`、`PLAN_UPLOAD_S3_*` | 任意 | plan ストレージ |
+| `GOOGLE_STORAGE_LOCK_BUCKET` | `gcp` 時必須 | GCS ロックのバケット |
+| `PLAN_UPLOAD_DESTINATION`、`AWS_S3_BUCKET`、`PLAN_UPLOAD_S3_*`、`GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` | 任意 | plan ストレージ |
 | `REPORTING_STRATEGY` | 任意 | §12.6 |
 | `DIGGER_MAX_PARALLEL` | 任意 | §8.1 |
 | `DIGGER_LOG_LEVEL` | 任意 | DEBUG / INFO / WARN / ERROR |
@@ -709,9 +713,9 @@ digger.yml の対応キーと既定値、PR ロックの DynamoDB スキーマ�
 
 ### 実装状況（v0.1）
 
-実装済み: §4 の 3 モード、§5（厳格バリデーション、generate_projects の Terraform/OpenTofu ブロック、影響判定、hard モードの下流展開）、§6（イベント→ジョブ、コメントフラグ `-p`/`-d` 複数、GitHub REST、apply 前提条件、auto-merge）、§7（Terraform/OpenTofu ランナー、run ステップ、plan JSON 集計、replace の別カウント）、§8（plan 並列、init 直列化、apply の依存レベル実行、ジョブごとの一時ディレクトリ、共有 dir の `TF_DATA_DIR` 分離）、§9（DynamoDB 互換スキーマ、2 フェーズ取得、closed PR からの奪取）、§10（S3）、§11（OIDC → STS、Cognito、BackendConfig 戦略）、§12（単一コメント、HTML マーカー、単一ライター + 2 秒デバウンス、サイズ予算と分割、`per_project` / `latest` モード）、§13（pending → success/failure）、§14（Slack、GitHub Issue）。
+実装済み: §4 の 3 モード、§5（厳格バリデーション、generate_projects の Terraform/OpenTofu ブロック、影響判定、hard モードの下流展開）、§6（イベント→ジョブ、コメントフラグ `-p`/`-d` 複数、GitHub REST、apply 前提条件、auto-merge）、§7（Terraform/OpenTofu ランナー、run ステップ、plan JSON 集計、replace の別カウント）、§8（plan 並列、init 直列化、apply の依存レベル実行、ジョブごとの一時ディレクトリ、共有 dir の `TF_DATA_DIR` 分離）、§9（DynamoDB 互換スキーマ、GCS ロック、2 フェーズ取得、closed PR からの奪取）、§10（S3、GCS）、§11（OIDC → STS、Cognito、BackendConfig 戦略）、§12（単一コメント、HTML マーカー、単一ライター + 2 秒デバウンス、サイズ予算と分割、`per_project` / `latest` モード）、§13（pending → success/failure）、§14（Slack、GitHub Issue）。
 
-未実装・簡略化: `comment.per_project_status`（プロジェクト別 commit status）は設定を受理するが未実装。`generate_projects` のトップレベル `include`/`exclude` は Digger 同様に単一 glob のみ。destroy は manual モードのみ（設計どおり）。実機検証は manual モード（plan / apply / destroy）をローカルで実施済み。PR イベントモード・DynamoDB・S3・OIDC は実際の GitHub Actions と AWS 環境での検証が未了。
+未実装・簡略化: `comment.per_project_status`（プロジェクト別 commit status）は設定を受理するが未実装。`generate_projects` のトップレベル `include`/`exclude` は Digger 同様に単一 glob のみ。destroy は manual モードのみ（設計どおり）。実機検証は manual モード（plan / apply / destroy）をローカルで実施済み。PR イベントモード・DynamoDB・S3・OIDC は実際の GitHub Actions と AWS 環境での検証が未了。GCS ロック・ストレージはモック API に対するテストのみで、実際の GCP 環境での検証は未了。
 
 ### 未決事項
 

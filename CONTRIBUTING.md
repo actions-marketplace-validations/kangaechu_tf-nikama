@@ -13,9 +13,9 @@ A good report includes:
 - what you expected and what happened, including the workflow log around the error
 
 Please note the project scope before filing a feature request: tf-nikama
-targets Terraform / OpenTofu on AWS only, and there are currently no plans to
-support other IaC tools (Terragrunt, Pulumi, ...) or cloud providers (GCP,
-Azure, ...). Requests for those will be closed as out of scope.
+targets Terraform / OpenTofu on AWS and Google Cloud only, and there are
+currently no plans to support other IaC tools (Terragrunt, Pulumi, ...) or
+cloud providers (Azure, ...). Requests for those will be closed as out of scope.
 
 ## Pull requests: maintainers only
 
