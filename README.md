@@ -65,6 +65,11 @@ concurrency:
 jobs:
   nikama:
     runs-on: ubuntu-latest
+    # Skip the runner for comments from outside the repository; nikama checks
+    # the commenter's write access itself (see "Who can run commands").
+    if: >-
+      github.event_name != 'issue_comment'
+      || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
     steps:
       - uses: actions/checkout@v4
         with:
@@ -150,6 +155,25 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    `digger/plan` and `digger/apply` to success, and a plan run in which no
    project has changes also sets `digger/apply` to success, so either can be
    used as a required check without blocking PRs that have nothing to apply.
+
+### Who can run commands
+
+A run executes the pull request's `nikama.yml` and Terraform code (providers
+included) with the workflow's credentials, so starting one is equivalent to
+running code in the repository. Comment commands (`nikama plan`, `nikama
+apply`, ...) are therefore only accepted from users whose repository role is
+`write`, `maintain` or `admin`, checked through the collaborator permission
+API at run time. A command from anyone else is answered with a short comment
+and the workflow exits 0. `nikama help` is answered for everyone.
+
+The `if:` guard in the quick start is only an optimisation that avoids
+starting a runner for comments from outside the repository: `COLLABORATOR`
+and `MEMBER` include read-only users, so the permission check inside nikama
+is the one that counts.
+
+`pull_request` events need no such check: GitHub gives workflows triggered by
+pull requests from forks a read-only token and no OIDC token, and branches in
+the repository itself can only be pushed by users with write access.
 
 ## Configuration file
 

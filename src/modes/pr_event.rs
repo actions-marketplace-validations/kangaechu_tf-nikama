@@ -457,6 +457,28 @@ pub(super) async fn build_trigger(
                 }
                 CommentVerb::Run(c) => c,
             };
+            // A run executes the pull request's `nikama.yml` and Terraform
+            // code with the workflow's credentials, so only users with write
+            // access may start one. `author_association` is not enough: a
+            // COLLABORATOR may be read-only.
+            let commenter = event.commenter();
+            let role = github.collaborator_role(commenter).await.map_err(|e| {
+                tracing::error!(error = %e, user = commenter, "could not check the commenter's repository permission");
+                exit::EVENT
+            })?;
+            if !has_write_access(&role) {
+                tracing::warn!(user = commenter, %role, command = %command, "ignoring command from a user without write access");
+                let _ = github
+                    .create_comment(
+                        pr_number,
+                        &format!(
+                            "**nikama**: `{}` was not run: {} does not have write access to this repository.",
+                            command, commenter
+                        ),
+                    )
+                    .await;
+                return Ok(None);
+            }
             let pr = github.get_pr(pr_number).await.map_err(|e| {
                 tracing::error!(error = %e, "could not fetch pull request");
                 exit::EVENT
@@ -762,6 +784,16 @@ fn released_notes(released: &[String]) -> Vec<String> {
             )
         })
         .collect()
+}
+
+/// Repository roles allowed to run comment commands. `triage` and `read`
+/// cannot push to the repository, so they must not be able to run its code
+/// either.
+pub(super) fn has_write_access(role: &str) -> bool {
+    matches!(
+        role.trim().to_ascii_lowercase().as_str(),
+        "admin" | "maintain" | "write"
+    )
 }
 
 /// Comment commands on a closed pull request (merged or not) are rejected,

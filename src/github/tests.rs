@@ -248,3 +248,32 @@ async fn compare_reads_ahead_and_behind() {
     assert_eq!(cmp.ahead_by, 4);
     assert_eq!(cmp.behind_by, 2);
 }
+
+#[tokio::test]
+async fn collaborator_role_prefers_role_name_and_maps_404_to_none() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/collaborators/alice/permission"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "permission": "write", "role_name": "maintain",
+            "user": {"login": "alice"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/collaborators/bob/permission"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "permission": "read", "user": {"login": "bob"}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/collaborators/nobody/permission"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("{\"message\":\"Not Found\"}"))
+        .mount(&server)
+        .await;
+    let c = client(&server).await;
+    assert_eq!(c.collaborator_role("alice").await.unwrap(), "maintain");
+    assert_eq!(c.collaborator_role("bob").await.unwrap(), "read");
+    assert_eq!(c.collaborator_role("nobody").await.unwrap(), "none");
+}

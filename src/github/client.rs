@@ -227,6 +227,38 @@ impl GithubClient {
         })
     }
 
+    /// Repository role of `login`: `admin`, `maintain`, `write`, `triage`,
+    /// `read` or `none` (`GET /collaborators/{login}/permission`). A user
+    /// GitHub does not know as a collaborator is reported as `none`.
+    pub async fn collaborator_role(&self, login: &str) -> Result<String> {
+        let res = self
+            .request(
+                Method::GET,
+                &self.repo_path(&format!(
+                    "/collaborators/{}/permission",
+                    urlencoding::encode(login)
+                )),
+                None,
+            )
+            .await;
+        let v = match res {
+            Ok(v) => v,
+            Err(GithubError::Status {
+                status: StatusCode::NOT_FOUND,
+                ..
+            }) => return Ok("none".to_string()),
+            Err(e) => return Err(e),
+        };
+        // `role_name` carries the fine-grained role (`maintain`, `triage`);
+        // `permission` only distinguishes admin / write / read / none.
+        let role = v["role_name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .or_else(|| v["permission"].as_str())
+            .unwrap_or("none");
+        Ok(role.to_string())
+    }
+
     /// Reviews of a PR in submission order (oldest first).
     pub async fn list_reviews(&self, number: u64) -> Result<Vec<ReviewInfo>> {
         let items = self

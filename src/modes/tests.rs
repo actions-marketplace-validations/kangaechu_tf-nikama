@@ -930,6 +930,7 @@ async fn plan_comment_on_merged_pr_is_rejected_with_a_comment() {
     use crate::github::{GithubClient, GithubContext};
     use wiremock::matchers::body_string_contains;
     let server = MockServer::start().await;
+    mock_role(&server, "me", "write").await;
     Mock::given(method("GET"))
         .and(path("/repos/o/r/pulls/7"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -969,4 +970,114 @@ async fn plan_comment_on_merged_pr_is_rejected_with_a_comment() {
         .unwrap()
         .iter()
         .all(|r| !r.url.path().ends_with("/files")));
+}
+
+// ---------------------------------------------------------------------------
+// Comment commands are only run for users with write access.
+
+#[test]
+fn write_access_roles() {
+    use super::pr_event::has_write_access;
+    for role in ["admin", "maintain", "write", "Write"] {
+        assert!(has_write_access(role), "{}", role);
+    }
+    for role in ["triage", "read", "none", ""] {
+        assert!(!has_write_access(role), "{}", role);
+    }
+}
+
+fn comment_context(login: &str, body: &str) -> crate::github::GithubContext {
+    crate::github::GithubContext::parse(&format!(
+        r#"{{"event_name":"issue_comment","actor":"{login}","repository":"o/r","run_id":"1","run_attempt":"1",
+            "event":{{"action":"created",
+                "issue":{{"number":5,"pull_request":{{"url":"u"}}}},
+                "comment":{{"id":9,"body":"{body}","user":{{"login":"{login}"}},"author_association":"COLLABORATOR"}},
+                "repository":{{"default_branch":"main","full_name":"o/r"}},
+                "sender":{{"login":"{login}"}}}}}}"#,
+    ))
+    .unwrap()
+}
+
+async fn mock_role(server: &MockServer, login: &str, role: &str) {
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/o/r/collaborators/{}/permission",
+            login
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "permission": "read", "role_name": role
+        })))
+        .mount(server)
+        .await;
+}
+
+#[tokio::test]
+async fn comment_command_from_read_only_user_is_refused() {
+    use super::pr_event::build_trigger;
+    use crate::github::GithubClient;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let server = MockServer::start().await;
+    mock_role(&server, "eve", "read").await;
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/5/comments"))
+        .and(wiremock::matchers::body_partial_json(serde_json::json!({
+            "body": "**nikama**: `plan` was not run: eve does not have write access to this repository."
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": 1})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+
+    let result = build_trigger(&config, &comment_context("eve", "digger plan"), &github).await;
+    assert!(
+        matches!(result, Ok(None)),
+        "{:?}",
+        result.map(|t| t.is_some())
+    );
+    // Nothing beyond the permission check and the reply was requested.
+    let paths: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|r| r.url.path().to_string())
+        .collect();
+    assert_eq!(
+        paths,
+        vec![
+            "/repos/o/r/collaborators/eve/permission",
+            "/repos/o/r/issues/5/comments"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn comment_command_from_writer_proceeds() {
+    use super::pr_event::build_trigger;
+    use crate::github::GithubClient;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let server = MockServer::start().await;
+    mock_role(&server, "alice", "write").await;
+    mock_pr_state(&server, 5, "open").await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/5/files"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!([{"filename": "a/main.tf"}])),
+        )
+        .mount(&server)
+        .await;
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+
+    let trigger = build_trigger(&config, &comment_context("alice", "digger plan"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert_eq!(trigger.pr_number, 5);
+    assert_eq!(trigger.jobs.len(), 1);
+    assert_eq!(trigger.jobs[0].command, Command::Plan);
+    assert_eq!(trigger.jobs[0].requested_by, "alice");
 }

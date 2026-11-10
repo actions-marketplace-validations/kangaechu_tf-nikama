@@ -106,6 +106,20 @@ pub struct Comment {
     pub id: u64,
     #[serde(default)]
     pub body: String,
+    /// Author of the comment. Falls back to the event sender when absent.
+    #[serde(default)]
+    pub user: Option<User>,
+}
+
+impl IssueCommentEvent {
+    /// Login of the user who wrote the comment.
+    pub fn commenter(&self) -> &str {
+        self.comment
+            .user
+            .as_ref()
+            .map(|u| u.login.as_str())
+            .unwrap_or(&self.sender.login)
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
