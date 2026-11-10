@@ -9,10 +9,24 @@ pub use s3::S3PlanStorage;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+/// Name of the object metadata entry holding the PR head SHA the plan was
+/// produced from (`x-amz-meta-head-sha` on S3).
+pub const HEAD_SHA_METADATA_KEY: &str = "head-sha";
+
+/// A stored plan file together with the commit it was produced from.
+/// `head_sha` is `None` for plans written without metadata (older versions
+/// of this tool, or Digger).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoredPlan {
+    pub bytes: Vec<u8>,
+    pub head_sha: Option<String>,
+}
+
 #[async_trait]
 pub trait PlanStorage: Send + Sync {
-    async fn store(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()>;
-    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
+    /// Store `bytes` under `key`, recording `head_sha` when given.
+    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()>;
+    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<StoredPlan>>;
     async fn delete(&self, key: &str) -> anyhow::Result<()>;
     async fn exists(&self, key: &str) -> anyhow::Result<bool>;
     fn name(&self) -> &'static str;
@@ -21,15 +35,20 @@ pub trait PlanStorage: Send + Sync {
     }
 }
 
-/// Storage that keeps nothing: `apply` runs without a saved plan.
+/// Storage that keeps nothing: `apply` plans immediately before applying.
 pub struct NoopPlanStorage;
 
 #[async_trait]
 impl PlanStorage for NoopPlanStorage {
-    async fn store(&self, _key: &str, _bytes: &[u8]) -> anyhow::Result<()> {
+    async fn store(
+        &self,
+        _key: &str,
+        _bytes: &[u8],
+        _head_sha: Option<&str>,
+    ) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn retrieve(&self, _key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn retrieve(&self, _key: &str) -> anyhow::Result<Option<StoredPlan>> {
         Ok(None)
     }
     async fn delete(&self, _key: &str) -> anyhow::Result<()> {

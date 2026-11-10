@@ -95,6 +95,7 @@ pub async fn run(
         locker: None,
         writer: None,
         max_parallel: env.max_parallel.unwrap_or(config.concurrency.max_parallel),
+        head_sha: None,
     });
     let mut results = run_parallel(ctx, jobs).await;
     results.sort_by(|a, b| a.project.cmp(&b.project));

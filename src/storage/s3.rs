@@ -1,6 +1,6 @@
 //! S3 plan storage.
 
-use super::PlanStorage;
+use super::{PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY};
 use async_trait::async_trait;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStream;
@@ -32,13 +32,16 @@ impl S3PlanStorage {
 
 #[async_trait]
 impl PlanStorage for S3PlanStorage {
-    async fn store(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()> {
         let mut req = self
             .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .body(ByteStream::from(bytes.to_vec()));
+        if let Some(sha) = head_sha {
+            req = req.metadata(HEAD_SHA_METADATA_KEY, sha);
+        }
         match &self.encryption {
             Some(Encryption::Aes256) => {
                 req = req.server_side_encryption(ServerSideEncryption::Aes256);
@@ -56,7 +59,7 @@ impl PlanStorage for S3PlanStorage {
         Ok(())
     }
 
-    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<StoredPlan>> {
         let res = self
             .client
             .get_object()
@@ -66,12 +69,20 @@ impl PlanStorage for S3PlanStorage {
             .await;
         match res {
             Ok(out) => {
+                let head_sha = out
+                    .metadata()
+                    .and_then(|m| m.get(HEAD_SHA_METADATA_KEY))
+                    .filter(|s| !s.is_empty())
+                    .cloned();
                 let data = out
                     .body
                     .collect()
                     .await
                     .map_err(|e| anyhow::anyhow!("s3 read failed: {}", e))?;
-                Ok(Some(data.into_bytes().to_vec()))
+                Ok(Some(StoredPlan {
+                    bytes: data.into_bytes().to_vec(),
+                    head_sha,
+                }))
             }
             Err(SdkError::ServiceError(e)) if e.err().is_no_such_key() => Ok(None),
             Err(e) => Err(anyhow::anyhow!("s3 get_object failed: {}", e)),

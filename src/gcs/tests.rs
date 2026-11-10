@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::lock::{GcsLock, Lock};
-use crate::storage::{GcsPlanStorage, PlanStorage};
+use crate::storage::{GcsPlanStorage, PlanStorage, StoredPlan};
 use serde_json::json;
 use wiremock::matchers::{body_string_contains, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -140,6 +140,7 @@ async fn plan_storage_round_trip() {
         .and(path("/upload/storage/v1/b/plans/o"))
         .and(query_param("uploadType", "multipart"))
         .and(body_string_contains(r#""name":"o-r-5-proj.tfplan""#))
+        .and(body_string_contains(r#""head-sha":"abc123""#))
         .and(body_string_contains(
             "Content-Type: application/octet-stream\r\n\r\nPLAN",
         ))
@@ -155,9 +156,10 @@ async fn plan_storage_round_trip() {
         .await;
     Mock::given(method("GET"))
         .and(path("/storage/v1/b/plans/o/o-r-5-proj.tfplan"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"name": "o-r-5-proj.tfplan"})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "name": "o-r-5-proj.tfplan",
+            "metadata": {"head-sha": "abc123"}
+        })))
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
@@ -170,11 +172,16 @@ async fn plan_storage_round_trip() {
     let s = GcsPlanStorage::new(client(&server), "plans");
     assert_eq!(s.name(), "gcs");
     assert!(!s.is_noop());
-    s.store("o-r-5-proj.tfplan", b"PLAN").await.unwrap();
+    s.store("o-r-5-proj.tfplan", b"PLAN", Some("abc123"))
+        .await
+        .unwrap();
     assert!(s.exists("o-r-5-proj.tfplan").await.unwrap());
     assert_eq!(
         s.retrieve("o-r-5-proj.tfplan").await.unwrap(),
-        Some(b"PLAN".to_vec())
+        Some(StoredPlan {
+            bytes: b"PLAN".to_vec(),
+            head_sha: Some("abc123".to_string()),
+        })
     );
     s.delete("o-r-5-proj.tfplan").await.unwrap();
 }

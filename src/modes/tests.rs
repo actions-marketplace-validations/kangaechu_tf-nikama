@@ -9,7 +9,7 @@ use crate::config::load_from_str;
 use crate::engine::{Command, Job, PlanResult, PlanSummary};
 use crate::github::client::{CombinedStatus, CompareInfo, ReviewInfo, StatusEntry};
 use crate::github::PrInfo;
-use crate::storage::NoopPlanStorage;
+use crate::storage::{NoopPlanStorage, PlanStorage, StoredPlan};
 use std::sync::Arc;
 
 fn pr(merged: bool, state: &str, mergeable: Option<bool>, mergeable_state: Option<&str>) -> PrInfo {
@@ -335,6 +335,7 @@ async fn run_by_levels_skips_dependents_of_failed_jobs() {
         locker: None,
         writer: None,
         max_parallel: 2,
+        head_sha: None,
     });
     let mut results = run_by_levels(ctx, jobs, 2).await;
     results.sort_by(|x, y| x.project.cmp(&y.project));
@@ -351,25 +352,69 @@ async fn run_by_levels_skips_dependents_of_failed_jobs() {
     assert!(results[2].outcome.is_err());
 }
 
-/// Plan storage that is configured (not noop) but holds nothing.
-struct EmptyStorage;
+/// In-memory plan storage that is configured (not noop). Empty by default.
+#[derive(Default)]
+struct MemoryStorage {
+    plans: std::sync::Mutex<std::collections::HashMap<String, StoredPlan>>,
+}
+
+impl MemoryStorage {
+    fn with(key: &str, head_sha: Option<&str>) -> Self {
+        let s = Self::default();
+        s.plans.lock().unwrap().insert(
+            key.to_string(),
+            StoredPlan {
+                bytes: b"not-a-real-plan".to_vec(),
+                head_sha: head_sha.map(|h| h.to_string()),
+            },
+        );
+        s
+    }
+}
 
 #[async_trait::async_trait]
-impl crate::storage::PlanStorage for EmptyStorage {
-    async fn store(&self, _key: &str, _bytes: &[u8]) -> anyhow::Result<()> {
+impl PlanStorage for MemoryStorage {
+    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()> {
+        self.plans.lock().unwrap().insert(
+            key.to_string(),
+            StoredPlan {
+                bytes: bytes.to_vec(),
+                head_sha: head_sha.map(|h| h.to_string()),
+            },
+        );
         Ok(())
     }
-    async fn retrieve(&self, _key: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        Ok(None)
+    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<StoredPlan>> {
+        Ok(self.plans.lock().unwrap().get(key).cloned())
     }
-    async fn delete(&self, _key: &str) -> anyhow::Result<()> {
+    async fn delete(&self, key: &str) -> anyhow::Result<()> {
+        self.plans.lock().unwrap().remove(key);
         Ok(())
     }
-    async fn exists(&self, _key: &str) -> anyhow::Result<bool> {
-        Ok(false)
+    async fn exists(&self, key: &str) -> anyhow::Result<bool> {
+        Ok(self.plans.lock().unwrap().contains_key(key))
     }
     fn name(&self) -> &'static str {
-        "empty"
+        "memory"
+    }
+}
+
+fn run_ctx(
+    tmp: &tempfile::TempDir,
+    config: &Arc<crate::config::Config>,
+    storage: Arc<dyn PlanStorage>,
+    head_sha: Option<&str>,
+) -> RunContext {
+    RunContext {
+        config: config.clone(),
+        repo_root: tmp.path().to_path_buf(),
+        work_root: tmp.path().join("work"),
+        init_lock: None,
+        storage,
+        locker: None,
+        writer: None,
+        max_parallel: 1,
+        head_sha: head_sha.map(|h| h.to_string()),
     }
 }
 
@@ -411,16 +456,12 @@ fn demo_apply_job(config: &crate::config::Config) -> Job {
 #[tokio::test]
 async fn apply_fails_when_storage_has_no_plan() {
     let (tmp, config) = demo_fixture(false);
-    let ctx = RunContext {
-        config: config.clone(),
-        repo_root: tmp.path().to_path_buf(),
-        work_root: tmp.path().join("work"),
-        init_lock: None,
-        storage: Arc::new(EmptyStorage),
-        locker: None,
-        writer: None,
-        max_parallel: 1,
-    };
+    let ctx = run_ctx(
+        &tmp,
+        &config,
+        Arc::new(MemoryStorage::default()),
+        Some("abc"),
+    );
     let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
     let err = result.outcome.unwrap_err();
     assert!(err.contains("no stored plan found"), "{}", err);
@@ -440,16 +481,7 @@ async fn apply_without_storage_plans_first_and_reports_it() {
         return;
     }
     let (tmp, config) = demo_fixture(true);
-    let ctx = RunContext {
-        config: config.clone(),
-        repo_root: tmp.path().to_path_buf(),
-        work_root: tmp.path().join("work"),
-        init_lock: None,
-        storage: Arc::new(NoopPlanStorage),
-        locker: None,
-        writer: None,
-        max_parallel: 1,
-    };
+    let ctx = run_ctx(&tmp, &config, Arc::new(NoopPlanStorage), None);
     let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
     let Ok(Outcome::Apply(a)) = result.outcome else {
         panic!("expected apply outcome: {:?}", result.outcome);
@@ -459,4 +491,86 @@ async fn apply_without_storage_plans_first_and_reports_it() {
     assert!(pre.plan_file.exists());
     assert!(a.output.contains("Apply complete!"), "{}", a.output);
     assert_eq!(a.summary.map(|s| s.added), Some(1));
+}
+
+#[test]
+fn stored_plan_commit_check() {
+    use super::run::check_stored_plan_commit;
+    // Same commit: fine.
+    assert!(check_stored_plan_commit("p", Some("abc"), Some("abc")).is_ok());
+    // Different commit: refused, with shortened SHAs.
+    let err = check_stored_plan_commit(
+        "p",
+        Some("0123456789abcdef0123456789abcdef01234567"),
+        Some("fedcba9876543210fedcba9876543210fedcba98"),
+    )
+    .unwrap_err();
+    assert!(err.contains("from commit 0123456789ab"), "{}", err);
+    assert!(err.contains("head is fedcba987654"), "{}", err);
+    assert!(err.contains("run `nikama plan` first"), "{}", err);
+    // Legacy plan without metadata: accepted.
+    assert!(check_stored_plan_commit("p", None, Some("abc")).is_ok());
+    // Outside PR mode nothing to compare against.
+    assert!(check_stored_plan_commit("p", Some("abc"), None).is_ok());
+}
+
+#[tokio::test]
+async fn apply_refuses_stored_plan_from_another_commit() {
+    let (tmp, config) = demo_fixture(false);
+    let storage = Arc::new(MemoryStorage::with("o-r-1-demo.tfplan", Some("old-sha")));
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("new-sha"));
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    let err = result.outcome.unwrap_err();
+    assert!(
+        err.contains("stored plan is from commit old-sha"),
+        "{}",
+        err
+    );
+    assert!(err.contains("head is new-sha"), "{}", err);
+    // The stale plan is kept so the user can inspect it; nothing was applied.
+    assert!(storage.exists("o-r-1-demo.tfplan").await.unwrap());
+}
+
+#[tokio::test]
+async fn apply_accepts_stored_plan_without_commit_metadata() {
+    // No terraform in the fixture dir, so the job fails later at `init`;
+    // what matters is that the commit check did not reject it.
+    let (tmp, config) = demo_fixture(false);
+    let storage = Arc::new(MemoryStorage::with("o-r-1-demo.tfplan", None));
+    let ctx = run_ctx(&tmp, &config, storage, Some("new-sha"));
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    let err = result.outcome.unwrap_err();
+    assert!(!err.contains("stored plan is from commit"), "{}", err);
+    assert!(!err.contains("no stored plan found"), "{}", err);
+}
+
+#[tokio::test]
+async fn plan_stores_head_sha_with_the_plan_file() {
+    if std::process::Command::new("terraform")
+        .arg("version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skipping: terraform not found on PATH");
+        return;
+    }
+    let (tmp, config) = demo_fixture(true);
+    let storage = Arc::new(MemoryStorage::default());
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("head-123"));
+    let mut job = demo_apply_job(&config);
+    job.command = Command::Plan;
+    let result = super::run::run_job(&ctx, job).await;
+    assert!(
+        matches!(result.outcome, Ok(Outcome::Plan(_))),
+        "{:?}",
+        result.outcome
+    );
+    let stored = storage
+        .retrieve("o-r-1-demo.tfplan")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.head_sha.as_deref(), Some("head-123"));
+    assert!(!stored.bytes.is_empty());
 }

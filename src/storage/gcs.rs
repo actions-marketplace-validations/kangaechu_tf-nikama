@@ -1,6 +1,6 @@
 //! Google Cloud Storage plan storage.
 
-use super::PlanStorage;
+use super::{PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY};
 use crate::gcs::GcsClient;
 use async_trait::async_trait;
 use std::collections::BTreeMap;
@@ -21,13 +21,17 @@ impl GcsPlanStorage {
 
 #[async_trait]
 impl PlanStorage for GcsPlanStorage {
-    async fn store(&self, key: &str, bytes: &[u8]) -> anyhow::Result<()> {
+    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()> {
+        let mut metadata = BTreeMap::new();
+        if let Some(sha) = head_sha {
+            metadata.insert(HEAD_SHA_METADATA_KEY.to_string(), sha.to_string());
+        }
         self.client
             .upload(
                 &self.bucket,
                 key,
                 "application/octet-stream",
-                &BTreeMap::new(),
+                &metadata,
                 bytes,
                 false,
             )
@@ -35,8 +39,19 @@ impl PlanStorage for GcsPlanStorage {
         Ok(())
     }
 
-    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        self.client.download(&self.bucket, key).await
+    async fn retrieve(&self, key: &str) -> anyhow::Result<Option<StoredPlan>> {
+        let Some(bytes) = self.client.download(&self.bucket, key).await? else {
+            return Ok(None);
+        };
+        // Custom metadata is not part of the media download; fetch the
+        // object resource for it.
+        let head_sha = self
+            .client
+            .info(&self.bucket, key)
+            .await?
+            .and_then(|i| i.metadata.get(HEAD_SHA_METADATA_KEY).cloned())
+            .filter(|s| !s.is_empty());
+        Ok(Some(StoredPlan { bytes, head_sha }))
     }
 
     async fn delete(&self, key: &str) -> anyhow::Result<()> {

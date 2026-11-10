@@ -487,6 +487,10 @@ plan と同じく `max_parallel` で並列。通知は完了順ではなくプ�
 - S3: `AWS_S3_BUCKET`、`PLAN_UPLOAD_S3_ENCRYPTION_ENABLED`、`PLAN_UPLOAD_S3_ENCRYPTION_TYPE` (`AES256` / `KMS`)、`PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID`。現行と同名。
 - キー: `<owner>-<repo>-<pr>-<project>.tfplan`（現行互換）。
 - plan 後に保存、apply 前に取得、unlock 時に削除。
+- 保存時に PR の head SHA をオブジェクトメタデータ `head-sha`（S3 では `x-amz-meta-head-sha`、GCS ではカスタムメタデータ）に記録する。キー形式は現行互換のまま。
+  - apply 時に保存 plan の `head-sha` と PR の head SHA を比較し、不一致ならジョブを失敗させる（「stored plan is from commit X but the pull request head is Y; run `nikama plan` first」）。最新コミットの plan が失敗・スキップされた場合に、古いコミットの plan が適用されるのを防ぐ。
+  - メタデータが無い plan（旧バージョンや現行 Digger が書いたもの）は警告付きで受け入れ、コメントの Notes にその旨を出す。
+  - head SHA が同じでも base ブランチが進んでいれば plan は古くなりうる。その検出は `apply_requirements: [undiverged]`（§6.5）の役割。
 - apply は常に plan ファイルから実行する（plan ファイルなしの `apply -auto-approve` は行わない）。
   - ストレージあり: 保存済み plan を取得して apply。見つからなければジョブを失敗させる（「no stored plan found for this pull request; run `nikama plan` first」）。apply 成功後に削除するので、再 apply には再 plan が必要。
   - ストレージなし: apply の直前に plan ステージを実行し、その plan ファイルで apply する。適用した plan の要約をコメントの該当行と Notes に出す（現行は plan ファイルなしで apply していたが、本ツールでは適用内容を必ず記録する）。init と plan が 1 回余計に走る。
