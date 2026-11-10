@@ -283,3 +283,43 @@ async fn storage_from_env_selects_gcs() {
         std::env::remove_var(v);
     }
 }
+
+#[tokio::test]
+async fn list_pages_and_held_by_filters_on_lock_id() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/locks/o"))
+        .and(query_param("prefix", "o/r#"))
+        .and(wiremock::matchers::query_param_is_missing("pageToken"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [
+                {"name": "o/r#a", "metadata": {"LockId": "7"}},
+                {"name": "o/r#b", "metadata": {"LockId": "8"}}
+            ],
+            "nextPageToken": "p2"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/storage/v1/b/locks/o"))
+        .and(query_param("prefix", "o/r#"))
+        .and(query_param("pageToken", "p2"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "items": [
+                {"name": "o/r#c", "metadata": {"LockId": " 7 "}},
+                {"name": "o/r#d"}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let objects = client(&server).list("locks", "o/r#").await.unwrap();
+    assert_eq!(
+        objects.iter().map(|o| o.name.as_str()).collect::<Vec<_>>(),
+        vec!["o/r#a", "o/r#b", "o/r#c", "o/r#d"]
+    );
+    let l = GcsLock::new(client(&server), "locks");
+    assert_eq!(
+        l.held_by(7, "o/r#").await.unwrap(),
+        vec!["o/r#a".to_string(), "o/r#c".to_string()]
+    );
+}

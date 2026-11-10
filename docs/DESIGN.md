@@ -460,17 +460,22 @@ plan と同じく `max_parallel` で並列。通知は完了順ではなくプ�
 ### 9.2 ロックのセマンティクス
 
 - `lock()`: 保持者を確認し、他 PR が保持していればその PR の状態を見る。closed なら奪取、open なら失敗。自 PR なら成功。未保持なら条件付き書き込みで取得。
+- `status()`: 取得せずに保持者だけ見る（Free / Ours / Other(PR)）。closed PR の保持は Free 扱い。
 - `unlock()`: 自 PR が保持者の場合のみ解放。
 - `force_unlock()`: 保持者に関わらず解放（`digger unlock` コマンド用）。
-- PR close / merge 時の解放は `on_pull_request_closed` / `on_commit_to_default` の既定 `digger unlock` に任せる。
+- `held_by(pr, prefix)`: `<owner>/<repo>#` 配下で自 PR が保持するロックを列挙する。DynamoDB は `PK = LOCK AND begins_with(SK, :prefix)` の `Query` に `transaction_id` フィルタ、GCS は prefix 付き objects.list の `LockId` メタデータで判定。
+- PR close / merge 時の解放は `on_pull_request_closed` / `on_commit_to_default` の既定 `digger unlock` に任せる。加えて、PR の close / merge イベントと選択子なしの `digger unlock` では、ジョブ実行後に `held_by` で自 PR の残りロックを全て解放する（impacted から外れたプロジェクトや `nikama.yml` から消えたプロジェクトの dangling lock 対策）。解放したプロジェクトはコメントの Notes に出し、保存 plan も削除する。impacted プロジェクトが 0 件でも実行する。
 - `pr_locks: false` または `DISABLE_LOCKING=true` なら NoOp。
 - manual / drift モードはロックしない。
 
 ### 9.3 2 フェーズ取得
 
-1. 実行前に全ジョブ分の `lock()` を並列に試みる（DynamoDB の条件付き書き込みは原子的）。ホルダー PR の状態確認は PR 番号ごとにキャッシュする。
-2. 取得できなかったプロジェクトはジョブから除外し、単一コメントの表に「🔒 locked by #N」と記録する。
-3. 取得できたプロジェクトだけ実行する。
+ロックは設定順（= impacted の順）に扱う。2 つの PR が同じプロジェクト群を取り合っても同じ順番で試すので、互いに半分ずつ握る膠着が起きない。
+
+1. **確認**: 全ジョブ分の `status()` を取る（取得はしない）。ホルダー PR の状態確認は PR 番号ごとにキャッシュする。
+2. 他の open PR が保持するプロジェクトが 1 つでもあれば、**新規取得は行わない**。該当行は「🔒 locked by #N」、取れたはずの行は「⏭️ skipped (lock not taken: X is locked by #N)」と記録し、既に自 PR が保持しているプロジェクト（前の commit で plan 済み）と lock / unlock ジョブだけ実行する。
+3. 全て Free なら設定順に `lock()` で取得する。確認と取得の間に他 PR に取られた（race）場合は、この run で新規取得したロックを解放して以降の取得を止め、同様に報告する。前から保持していたロックは解放しない。
+4. いずれかの行がロック由来で実行できなければ commit status は failure にする。
 
 ### 9.4 環境変数
 

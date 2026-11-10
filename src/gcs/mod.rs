@@ -36,8 +36,27 @@ pub struct GcsClient {
 /// Object attributes used by the lock backend.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ObjectInfo {
+    pub name: String,
     pub generation: Option<i64>,
     pub metadata: BTreeMap<String, String>,
+}
+
+impl ObjectInfo {
+    fn from_resource(v: &serde_json::Value) -> Self {
+        let metadata = v["metadata"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            name: v["name"].as_str().unwrap_or_default().to_string(),
+            generation: v["generation"].as_str().and_then(|g| g.parse().ok()),
+            metadata,
+        }
+    }
 }
 
 /// Outcome of an upload with `ifGenerationMatch=0`.
@@ -187,23 +206,42 @@ impl GcsClient {
         match resp.status() {
             s if s.is_success() => {
                 let v: serde_json::Value = resp.json().await?;
-                let generation = v["generation"].as_str().and_then(|g| g.parse().ok());
-                let metadata = v["metadata"]
-                    .as_object()
-                    .map(|m| {
-                        m.iter()
-                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Ok(Some(ObjectInfo {
-                    generation,
-                    metadata,
-                }))
+                Ok(Some(ObjectInfo::from_resource(&v)))
             }
             StatusCode::NOT_FOUND => Ok(None),
             s => Err(api_error("get", bucket, object, s, resp).await),
         }
+    }
+
+    /// Objects whose name starts with `prefix`, with their metadata.
+    pub async fn list(&self, bucket: &str, prefix: &str) -> anyhow::Result<Vec<ObjectInfo>> {
+        let mut out = Vec::new();
+        let mut page_token: Option<String> = None;
+        loop {
+            let mut url = format!(
+                "{}/storage/v1/b/{}/o?prefix={}",
+                self.endpoint,
+                urlencoding::encode(bucket),
+                urlencoding::encode(prefix)
+            );
+            if let Some(t) = &page_token {
+                url.push_str(&format!("&pageToken={}", urlencoding::encode(t)));
+            }
+            let resp = self.authorize(self.http.get(&url)).await?.send().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                return Err(api_error("list", bucket, prefix, status, resp).await);
+            }
+            let v: serde_json::Value = resp.json().await?;
+            if let Some(items) = v["items"].as_array() {
+                out.extend(items.iter().map(ObjectInfo::from_resource));
+            }
+            match v["nextPageToken"].as_str() {
+                Some(t) if !t.is_empty() => page_token = Some(t.to_string()),
+                _ => break,
+            }
+        }
+        Ok(out)
     }
 
     /// Delete `object`. Returns whether it existed.

@@ -10,7 +10,7 @@ use crate::github::events::{
     classify_pr_event, jobs_for_comment, jobs_for_pull_request, select_projects, PrSelector,
 };
 use crate::github::{parse_comment, CommentVerb, GithubClient, GithubContext};
-use crate::lock::{LockOutcome, PrLocker};
+use crate::lock::{HolderStatus, LockOutcome, PrLocker};
 use crate::report::{ReportWriter, RowStatus, RunReport};
 use std::sync::Arc;
 
@@ -21,6 +21,9 @@ pub(super) struct Trigger {
     covers_all_impacted: bool,
     notes: Vec<String>,
     comment_id: Option<u64>,
+    /// Release every lock this PR holds, not only those of impacted projects
+    /// (PR closed / merged, or a bare `digger unlock`).
+    release_all_locks: bool,
 }
 
 pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: GithubClient) -> i32 {
@@ -31,9 +34,19 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     };
     if trigger.jobs.is_empty() {
         tracing::info!("no jobs to run");
-        if !trigger.notes.is_empty() {
-            let body = trigger
-                .notes
+        let mut notes = trigger.notes.clone();
+        if trigger.release_all_locks {
+            // A PR that no longer impacts any project may still hold locks
+            // from earlier commits; release them on close / unlock.
+            match sweep_locks_from_env(&config, &github, trigger.pr_number, &ctx.repository, &[])
+                .await
+            {
+                Ok(released) => notes.extend(released_notes(&released)),
+                Err(e) => notes.push(format!("could not release remaining locks: {}", e)),
+            }
+        }
+        if !notes.is_empty() {
+            let body = notes
                 .iter()
                 .map(|n| format!("- {}", n))
                 .collect::<Vec<_>>()
@@ -128,37 +141,20 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
             return exit::LOCK_INIT;
         }
     };
-    let mut runnable = Vec::new();
-    let mut lock_failed = false;
-    for job in trigger.jobs {
-        if matches!(
-            job.command,
-            Command::Plan | Command::Apply | Command::Destroy
-        ) {
-            match locker.lock(trigger.pr_number, &job.lock_id()).await {
-                Ok(LockOutcome::Acquired) | Ok(LockOutcome::AlreadyHeld) => runnable.push(job),
-                Ok(LockOutcome::HeldByOther(other)) => {
-                    lock_failed = true;
-                    let n = job.project.name.clone();
-                    writer.update(move |r| r.row_mut(&n).status = RowStatus::LockedByOther(other));
-                    tracing::warn!(project = %job.project.name, other, "project locked by another PR");
-                }
-                Err(e) => {
-                    lock_failed = true;
-                    let n = job.project.name.clone();
-                    let msg = format!("lock error: {}", e);
-                    writer.update(move |r| {
-                        let row = r.row_mut(&n);
-                        row.status = RowStatus::Failed;
-                        row.detail_kind = Some(crate::report::DetailKind::Error);
-                        row.detail = Some(msg);
-                    });
-                }
+    let keep_locks: Vec<String> = trigger.jobs.iter().map(|j| j.lock_id()).collect();
+    let plan = acquire_locks(&locker, trigger.pr_number, trigger.jobs).await;
+    let lock_failed = plan.failed;
+    for (name, status, detail) in plan.rows {
+        writer.update(move |r| {
+            let row = r.row_mut(&name);
+            row.status = status;
+            if let Some(d) = detail {
+                row.detail_kind = Some(crate::report::DetailKind::Error);
+                row.detail = Some(d);
             }
-        } else {
-            runnable.push(job);
-        }
+        });
     }
+    let runnable = plan.runnable;
 
     // Apply preconditions.
     let has_apply = runnable.iter().any(|j| matches!(j.command, Command::Apply));
@@ -234,6 +230,29 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
             )
             .await,
         );
+    }
+
+    if trigger.release_all_locks {
+        match sweep_locks(
+            &locker,
+            run_ctx.storage.as_ref(),
+            trigger.pr_number,
+            &ctx.repository,
+            &keep_locks,
+        )
+        .await
+        {
+            Ok(released) => {
+                let notes = released_notes(&released);
+                if !notes.is_empty() {
+                    writer.update(move |r| r.notes.extend(notes));
+                }
+            }
+            Err(e) => {
+                let msg = format!("could not release remaining locks: {}", e);
+                writer.update(move |r| r.notes.push(msg));
+            }
+        }
     }
 
     writer.finish().await;
@@ -312,12 +331,15 @@ pub(super) async fn build_trigger(
             let impacted = crate::config::impacted_projects(config, &files);
             log_impacted(&impacted);
             let jobs = jobs_for_pull_request(&event, config, &impacted, &selector);
+            let release_all_locks =
+                matches!(selector, PrSelector::Closed | PrSelector::CommitToDefault);
             Ok(Some(Trigger {
                 pr_number,
                 jobs,
                 covers_all_impacted: true,
                 notes: vec![],
                 comment_id: None,
+                release_all_locks,
             }))
         }
         "issue_comment" => {
@@ -386,12 +408,17 @@ pub(super) async fn build_trigger(
             }
             let covers_all = selected.len() == impacted.len();
             let jobs = jobs_for_comment(&event, config, &selected, command, &pr.head_ref);
+            // A bare `digger unlock` releases everything this PR holds; with
+            // `-p` / `-d` only the selected projects are touched.
+            let release_all_locks =
+                command == Command::Unlock && cmd.projects.is_empty() && cmd.dirs.is_empty();
             Ok(Some(Trigger {
                 pr_number,
                 jobs,
                 covers_all_impacted: covers_all,
                 notes,
                 comment_id: Some(event.comment.id),
+                release_all_locks,
             }))
         }
         "merge_group" => {
@@ -415,6 +442,244 @@ pub(super) async fn build_trigger(
             Ok(None)
         }
     }
+}
+
+/// Result of the lock phase: which jobs may run and what to show for the rest.
+pub(super) struct LockPlan {
+    pub runnable: Vec<Job>,
+    /// (project, status, error detail) for jobs that will not run.
+    pub rows: Vec<(String, RowStatus, Option<String>)>,
+    pub failed: bool,
+}
+
+fn lockable(job: &Job) -> bool {
+    matches!(
+        job.command,
+        Command::Plan | Command::Apply | Command::Destroy
+    )
+}
+
+/// Take the locks for `jobs` (DESIGN.md §9.3).
+///
+/// Locks are checked first and then acquired in job order, which follows the
+/// configuration order, so two PRs contending for the same projects always
+/// try them in the same sequence. When any project is held by another open
+/// PR, nothing new is acquired and anything acquired in this run is released
+/// again; only jobs whose lock this PR already held from an earlier run keep
+/// running. Jobs that need no lock (`lock` / `unlock`) always run.
+pub(super) async fn acquire_locks(locker: &PrLocker, pr: u64, jobs: Vec<Job>) -> LockPlan {
+    /// What phase 1 learned about one job.
+    enum Pre {
+        /// Needs no lock (`lock` / `unlock` jobs).
+        NoLock,
+        Ours,
+        Free,
+        Other(u64),
+        /// Backend error; the row is already recorded.
+        Error,
+    }
+
+    let mut plan = LockPlan {
+        runnable: Vec::new(),
+        rows: Vec::new(),
+        failed: false,
+    };
+
+    // Phase 1: look, do not touch.
+    let mut pre: Vec<Pre> = Vec::with_capacity(jobs.len());
+    let mut blocked: Vec<(String, u64)> = Vec::new();
+    for job in &jobs {
+        if !lockable(job) {
+            pre.push(Pre::NoLock);
+            continue;
+        }
+        match locker.status(pr, &job.lock_id()).await {
+            Ok(HolderStatus::Ours) => pre.push(Pre::Ours),
+            Ok(HolderStatus::Free) => pre.push(Pre::Free),
+            Ok(HolderStatus::Other(other)) => {
+                blocked.push((job.project.name.clone(), other));
+                pre.push(Pre::Other(other));
+            }
+            Err(e) => {
+                plan.failed = true;
+                plan.rows.push((
+                    job.project.name.clone(),
+                    RowStatus::Failed,
+                    Some(format!("lock error: {}", e)),
+                ));
+                pre.push(Pre::Error);
+            }
+        }
+    }
+
+    if !blocked.is_empty() {
+        plan.failed = true;
+        let why = blocked
+            .iter()
+            .map(|(p, other)| format!("{} is locked by #{}", p, other))
+            .collect::<Vec<_>>()
+            .join(", ");
+        for (job, st) in jobs.into_iter().zip(pre) {
+            match st {
+                Pre::NoLock | Pre::Ours => plan.runnable.push(job),
+                Pre::Error => {}
+                Pre::Other(other) => {
+                    tracing::warn!(project = %job.project.name, other, "project locked by another PR");
+                    plan.rows.push((
+                        job.project.name.clone(),
+                        RowStatus::LockedByOther(other),
+                        None,
+                    ));
+                }
+                Pre::Free => plan.rows.push((
+                    job.project.name.clone(),
+                    RowStatus::Skipped(format!("lock not taken: {}", why)),
+                    None,
+                )),
+            }
+        }
+        return plan;
+    }
+
+    // Phase 2: acquire in order; a lost race rolls back this run's locks.
+    let mut acquired_now: Vec<(usize, String)> = Vec::new(); // (index in runnable, resource)
+    let mut lost: Option<(String, u64)> = None;
+    let mut it = jobs.into_iter().zip(pre);
+    for (job, st) in it.by_ref() {
+        match st {
+            Pre::NoLock | Pre::Ours => plan.runnable.push(job),
+            Pre::Error | Pre::Other(_) => {}
+            Pre::Free => match locker.lock(pr, &job.lock_id()).await {
+                Ok(LockOutcome::Acquired) => {
+                    acquired_now.push((plan.runnable.len(), job.lock_id()));
+                    plan.runnable.push(job);
+                }
+                Ok(LockOutcome::AlreadyHeld) => plan.runnable.push(job),
+                Ok(LockOutcome::HeldByOther(other)) => {
+                    tracing::warn!(project = %job.project.name, other, "lost the race for a project lock");
+                    lost = Some((job.project.name.clone(), other));
+                    plan.rows.push((
+                        job.project.name.clone(),
+                        RowStatus::LockedByOther(other),
+                        None,
+                    ));
+                    break;
+                }
+                Err(e) => {
+                    plan.failed = true;
+                    plan.rows.push((
+                        job.project.name.clone(),
+                        RowStatus::Failed,
+                        Some(format!("lock error: {}", e)),
+                    ));
+                }
+            },
+        }
+    }
+    if let Some((name, other)) = lost {
+        plan.failed = true;
+        let why = format!("{} is locked by #{}", name, other);
+        // Roll back what this run took.
+        let mut released = std::collections::BTreeSet::new();
+        for (idx, resource) in &acquired_now {
+            if let Err(e) = locker.unlock(pr, resource).await {
+                tracing::warn!(resource, error = %e, "could not release a lock taken in this run");
+            }
+            released.insert(*idx);
+        }
+        let kept: Vec<Job> = std::mem::take(&mut plan.runnable);
+        for (idx, job) in kept.into_iter().enumerate() {
+            if released.contains(&idx) {
+                plan.rows.push((
+                    job.project.name.clone(),
+                    RowStatus::Skipped(format!("lock released: {}", why)),
+                    None,
+                ));
+            } else {
+                plan.runnable.push(job);
+            }
+        }
+        // Not attempted.
+        for (job, st) in it {
+            match st {
+                Pre::NoLock | Pre::Ours => plan.runnable.push(job),
+                _ => plan.rows.push((
+                    job.project.name.clone(),
+                    RowStatus::Skipped(format!("lock not taken: {}", why)),
+                    None,
+                )),
+            }
+        }
+    }
+    plan
+}
+
+/// Release every lock under `namespace` held by `pr` except `keep`
+/// (DESIGN.md §9.2, dangling locks). Returns the released project names.
+pub(super) async fn sweep_locks(
+    locker: &PrLocker,
+    storage: &dyn crate::storage::PlanStorage,
+    pr: u64,
+    namespace: &str,
+    keep: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let prefix = format!("{}#", namespace);
+    let mut released = Vec::new();
+    for resource in locker.held_by(pr, &prefix).await? {
+        if keep.contains(&resource) {
+            continue;
+        }
+        let project = resource
+            .strip_prefix(&prefix)
+            .unwrap_or(&resource)
+            .to_string();
+        if locker.unlock(pr, &resource).await? {
+            tracing::info!(
+                project,
+                pr,
+                "released lock of a project that is no longer impacted"
+            );
+            if let Err(e) = storage
+                .delete(&crate::engine::plan_file_name(
+                    namespace,
+                    Some(pr),
+                    &project,
+                ))
+                .await
+            {
+                tracing::warn!(project, error = %e, "failed to delete stored plan");
+            }
+            released.push(project);
+        }
+    }
+    Ok(released)
+}
+
+/// `sweep_locks` for the path where no jobs run (lock backend and storage
+/// are created here).
+async fn sweep_locks_from_env(
+    config: &Config,
+    github: &GithubClient,
+    pr: u64,
+    namespace: &str,
+    keep: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let backend = crate::lock::from_env(config.pr_locks).await?;
+    let locker = PrLocker::new(backend, github.clone());
+    let storage = crate::storage::from_env().await?;
+    sweep_locks(&locker, storage.as_ref(), pr, namespace, keep).await
+}
+
+fn released_notes(released: &[String]) -> Vec<String> {
+    released
+        .iter()
+        .map(|p| {
+            format!(
+                "released lock of `{}` (no longer impacted by this pull request)",
+                p
+            )
+        })
+        .collect()
 }
 
 fn log_impacted(impacted: &[crate::config::Project]) {

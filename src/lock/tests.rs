@@ -2,37 +2,10 @@
 
 use super::*;
 use serde_json::json;
-use std::collections::HashMap;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-#[derive(Default)]
-struct MemLock {
-    held: Mutex<HashMap<String, u64>>,
-}
-
-#[async_trait]
-impl Lock for MemLock {
-    async fn lock(&self, pr: u64, resource: &str) -> anyhow::Result<bool> {
-        let mut h = self.held.lock().await;
-        match h.get(resource) {
-            Some(holder) if *holder != pr => Ok(false),
-            _ => {
-                h.insert(resource.to_string(), pr);
-                Ok(true)
-            }
-        }
-    }
-    async fn unlock(&self, resource: &str) -> anyhow::Result<bool> {
-        Ok(self.held.lock().await.remove(resource).is_some())
-    }
-    async fn holder(&self, resource: &str) -> anyhow::Result<Option<u64>> {
-        Ok(self.held.lock().await.get(resource).copied())
-    }
-    fn name(&self) -> &'static str {
-        "mem"
-    }
-}
+use super::testing::MemLock;
 
 async fn mock_pr(server: &MockServer, number: u64, state: &str) {
     Mock::given(method("GET"))
@@ -148,4 +121,30 @@ async fn from_env_selection() {
     let err = from_env(true).await.err().unwrap().to_string();
     assert!(err.contains("unknown LOCK_PROVIDER"), "{}", err);
     std::env::remove_var("LOCK_PROVIDER");
+}
+
+#[tokio::test]
+async fn status_and_held_by() {
+    let server = MockServer::start().await;
+    mock_pr(&server, 2, "open").await;
+    mock_pr(&server, 3, "closed").await;
+    let mem = Arc::new(MemLock::holding(&[
+        ("o/r#a", 1),
+        ("o/r#b", 2),
+        ("o/r#c", 3),
+        ("o/r#d", 1),
+        ("x/y#a", 1),
+    ]));
+    let l = locker(&server, mem.clone());
+    assert_eq!(l.status(1, "o/r#a").await.unwrap(), HolderStatus::Ours);
+    assert_eq!(l.status(1, "o/r#b").await.unwrap(), HolderStatus::Other(2));
+    // Held by a closed PR: free for the taking.
+    assert_eq!(l.status(1, "o/r#c").await.unwrap(), HolderStatus::Free);
+    assert_eq!(l.status(1, "o/r#zzz").await.unwrap(), HolderStatus::Free);
+    // status() never acquires.
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), Some(3));
+    assert_eq!(
+        l.held_by(1, "o/r#").await.unwrap(),
+        vec!["o/r#a".to_string(), "o/r#d".to_string()]
+    );
 }
