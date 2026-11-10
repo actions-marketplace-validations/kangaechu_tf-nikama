@@ -223,7 +223,7 @@ impl RunReport {
     }
 
     fn footer(&self) -> String {
-        "\n---\n`digger apply` · `digger apply -p <project>` · `digger unlock` · `digger help`\n"
+        "\n---\n`nikama apply` · `nikama apply -p <project>` · `nikama unlock` · `nikama help`\n"
             .to_string()
     }
 
@@ -403,7 +403,7 @@ mod tests {
         assert!(body.contains("<b>app</b> · plan output"));
         // Empty plans do not get a details block.
         assert!(!body.contains("<b>net</b>"));
-        assert!(body.contains("`digger apply`"));
+        assert!(body.contains("`nikama apply`"));
     }
 
     #[test]

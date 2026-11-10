@@ -355,7 +355,7 @@ async fn build_trigger(
                     let _ = github
                         .create_comment(
                             pr_number,
-                            "**nikama**: `destroy` cannot be run from a PR comment. Use a manually dispatched workflow with `mode: manual` and `command: digger destroy`.",
+                            "**nikama**: `destroy` cannot be run from a PR comment. Use a manually dispatched workflow with `mode: manual` and `command: nikama destroy`.",
                         )
                         .await;
                     return Err(exit::COMMAND);

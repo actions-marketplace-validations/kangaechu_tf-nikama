@@ -107,14 +107,14 @@ pub const HELP_TEXT: &str = "\
 
 | Command | Description |
 |---|---|
-| `digger plan` | Plan all projects impacted by this PR |
-| `digger plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
-| `digger apply` | Apply all impacted projects (PR must be mergeable) |
-| `digger apply -p <project>` | Apply selected project(s) |
-| `digger lock` / `digger unlock` | Acquire / release the PR-level lock for impacted projects |
-| `digger help` | Show this message |
+| `nikama plan` | Plan all projects impacted by this PR |
+| `nikama plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
+| `nikama apply` | Apply all impacted projects (PR must be mergeable) |
+| `nikama apply -p <project>` | Apply selected project(s) |
+| `nikama lock` / `nikama unlock` | Acquire / release the PR-level lock for impacted projects |
+| `nikama help` | Show this message |
 
-`nikama` can be used in place of `digger` in every command.";
+`digger` can be used in place of `nikama` in every command.";
 
 #[cfg(test)]
 mod tests {
