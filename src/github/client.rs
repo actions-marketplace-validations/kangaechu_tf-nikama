@@ -18,6 +18,8 @@ pub enum GithubError {
     Http(#[from] reqwest::Error),
     #[error("GitHub API response could not be decoded: {0}")]
     Decode(#[from] serde_json::Error),
+    #[error("GitHub GraphQL query failed: {0}")]
+    GraphQl(String),
 }
 
 pub type Result<T> = std::result::Result<T, GithubError>;
@@ -74,6 +76,37 @@ pub struct ReviewInfo {
 pub struct CompareInfo {
     pub ahead_by: u64,
     pub behind_by: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckKind {
+    CheckRun,
+    Status,
+}
+
+/// One check run or commit status on a pull request's head commit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CheckContext {
+    /// Check run name or status context.
+    pub name: String,
+    pub kind: CheckKind,
+    /// Required by branch protection / rulesets for this pull request.
+    pub required: bool,
+    /// Lower-case: `success`, `pending`, `failure`, `neutral`, `skipped`,
+    /// `cancelled`, `timed_out`, `action_required`, `error`, `expected`, ...
+    pub state: String,
+    /// `details_url` of a check run (the Actions run URL for workflow jobs)
+    /// or `target_url` of a status.
+    pub details_url: String,
+}
+
+/// What branch protection evaluates for a pull request.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct MergeRequirements {
+    /// `APPROVED`, `CHANGES_REQUESTED` or `REVIEW_REQUIRED`; `None` when no
+    /// review rule applies to the pull request.
+    pub review_decision: Option<String>,
+    pub contexts: Vec<CheckContext>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -138,7 +171,11 @@ impl GithubClient {
         body: Option<Value>,
         accept: &str,
     ) -> Result<String> {
-        let url = format!("{}{}", self.api_base, path);
+        let url = if path.starts_with("http://") || path.starts_with("https://") {
+            path.to_string()
+        } else {
+            format!("{}{}", self.api_base, path)
+        };
         let mut attempt = 0u32;
         loop {
             attempt += 1;
@@ -419,6 +456,129 @@ impl GithubClient {
         )
         .await?;
         Ok(())
+    }
+
+    /// GraphQL endpoint: `/graphql` next to the REST base (`/api/v3` →
+    /// `/api/graphql` on GitHub Enterprise Server).
+    fn graphql_url(&self) -> String {
+        match self.api_base.strip_suffix("/api/v3") {
+            Some(host) => format!("{}/api/graphql", host),
+            None => format!("{}/graphql", self.api_base),
+        }
+    }
+
+    async fn graphql(&self, query: &str, variables: Value) -> Result<Value> {
+        let v = self
+            .request(
+                Method::POST,
+                &self.graphql_url(),
+                Some(json!({ "query": query, "variables": variables })),
+            )
+            .await?;
+        if let Some(errors) = v["errors"].as_array().filter(|e| !e.is_empty()) {
+            let msgs: Vec<String> = errors
+                .iter()
+                .map(|e| e["message"].as_str().unwrap_or("unknown error").to_string())
+                .collect();
+            return Err(GithubError::GraphQl(msgs.join("; ")));
+        }
+        Ok(v["data"].clone())
+    }
+
+    /// What branch protection sees for a pull request: the review decision
+    /// and every check run / commit status on the head commit, with whether
+    /// branch protection requires it.
+    pub async fn merge_requirements(&self, number: u64) -> Result<MergeRequirements> {
+        const QUERY: &str = r#"
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewDecision
+      commits(last: 1) {
+        nodes {
+          commit {
+            statusCheckRollup {
+              contexts(first: 100) {
+                nodes {
+                  __typename
+                  ... on CheckRun {
+                    name
+                    status
+                    conclusion
+                    detailsUrl
+                    isRequired(pullRequestNumber: $number)
+                  }
+                  ... on StatusContext {
+                    context
+                    state
+                    targetUrl
+                    isRequired(pullRequestNumber: $number)
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#;
+        let data = self
+            .graphql(
+                QUERY,
+                json!({ "owner": self.owner, "repo": self.repo, "number": number }),
+            )
+            .await?;
+        let pr = &data["repository"]["pullRequest"];
+        if pr.is_null() {
+            return Err(GithubError::GraphQl(format!(
+                "pull request #{} not found",
+                number
+            )));
+        }
+        let review_decision = pr["reviewDecision"].as_str().map(|s| s.to_string());
+        let mut contexts = Vec::new();
+        let nodes = &pr["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"];
+        for n in nodes.as_array().into_iter().flatten() {
+            let required = n["isRequired"].as_bool().unwrap_or(false);
+            match n["__typename"].as_str() {
+                Some("CheckRun") => {
+                    let status = n["status"].as_str().unwrap_or("").to_ascii_lowercase();
+                    let state = if status == "completed" {
+                        n["conclusion"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_ascii_lowercase()
+                    } else {
+                        "pending".to_string()
+                    };
+                    contexts.push(CheckContext {
+                        name: n["name"].as_str().unwrap_or_default().to_string(),
+                        kind: CheckKind::CheckRun,
+                        required,
+                        state,
+                        details_url: n["detailsUrl"].as_str().unwrap_or_default().to_string(),
+                    });
+                }
+                Some("StatusContext") => {
+                    contexts.push(CheckContext {
+                        name: n["context"].as_str().unwrap_or_default().to_string(),
+                        kind: CheckKind::Status,
+                        required,
+                        state: n["state"]
+                            .as_str()
+                            .unwrap_or("unknown")
+                            .to_ascii_lowercase(),
+                        details_url: n["targetUrl"].as_str().unwrap_or_default().to_string(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        Ok(MergeRequirements {
+            review_decision,
+            contexts,
+        })
     }
 
     pub async fn combined_status(&self, sha: &str) -> Result<CombinedStatus> {

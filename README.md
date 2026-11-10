@@ -143,11 +143,14 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    on a bare `digger unlock`, every lock the PR still holds is released, not
    only those of the currently impacted projects.
 5. Before an apply, each project's `apply_requirements` are checked against
-   the PR: `mergeable` (GitHub reports the PR as mergeable), `approved` (at
-   least one approving review from someone other than the author and no
-   outstanding "changes requested"), `undiverged` (the branch is not behind
-   its base). The default is `[mergeable]`; a closed, unmerged PR is always
-   rejected.
+   the PR: `mergeable` (GitHub reports the PR as mergeable; when branch
+   protection reports it as *blocked*, the required reviews must be in
+   place and every required check run or status other than nikama's own
+   must have passed, so that a required `digger/apply` check does not block
+   itself), `approved` (at least one approving review from someone other
+   than the author and no outstanding "changes requested"), `undiverged`
+   (the branch is not behind its base). The default is `[mergeable]`; a
+   closed, unmerged PR is always rejected.
 6. Plans run in parallel (`concurrency.max_parallel`); applies run level by
    level in dependency order. The comment is edited as projects finish.
    An apply always uses a plan file: the stored one when plan storage is

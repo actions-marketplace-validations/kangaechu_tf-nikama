@@ -1,14 +1,14 @@
 //! Orchestration tests: apply gating, summaries, dependency-level execution.
 
 use super::pr_event::{
-    acquire_locks, all_plans_empty, apply_gate, check_approved, check_required_statuses,
-    check_undiverged, closed_pr_rejection, draft_pr_rejection, required_checks, set_noop_statuses,
-    summarize, sweep_locks, ApplyGate,
+    acquire_locks, all_plans_empty, apply_gate, check_approved, check_blocked, check_undiverged,
+    closed_pr_rejection, draft_pr_rejection, required_checks, set_noop_statuses, summarize,
+    sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
 use crate::engine::{Command, Job, PlanResult, PlanSummary};
-use crate::github::client::{CombinedStatus, CompareInfo, ReviewInfo, StatusEntry};
+use crate::github::client::{CheckContext, CheckKind, CompareInfo, MergeRequirements, ReviewInfo};
 use crate::github::PrInfo;
 use crate::storage::{NoopPlanStorage, PlanStorage, StoredPlan};
 use std::sync::Arc;
@@ -226,39 +226,106 @@ fn undiverged_requirement() {
     assert!(err.contains("2 commit(s) behind"), "{}", err);
 }
 
+fn ctx(name: &str, kind: CheckKind, required: bool, state: &str, url: &str) -> CheckContext {
+    CheckContext {
+        name: name.into(),
+        kind,
+        required,
+        state: state.into(),
+        details_url: url.into(),
+    }
+}
+
 #[test]
-fn required_statuses_ignore_own_contexts() {
-    let combined = CombinedStatus {
-        state: "pending".into(),
-        statuses: vec![
-            StatusEntry {
-                context: "digger/apply".into(),
-                state: "pending".into(),
-            },
-            StatusEntry {
-                context: "digger/plan".into(),
-                state: "failure".into(),
-            },
-            StatusEntry {
-                context: "nikama/plan/x".into(),
-                state: "pending".into(),
-            },
-            StatusEntry {
-                context: "ci/test".into(),
-                state: "success".into(),
-            },
+fn blocked_pr_passes_when_only_nikama_blocks_it() {
+    let req = MergeRequirements {
+        review_decision: Some("APPROVED".into()),
+        contexts: vec![
+            // Our own statuses, whatever their state.
+            ctx("digger/apply", CheckKind::Status, true, "pending", ""),
+            ctx("digger/plan", CheckKind::Status, true, "failure", ""),
+            ctx("nikama/plan/x", CheckKind::Status, true, "pending", ""),
+            // The job of the current workflow run (the apply itself).
+            ctx(
+                "nikama",
+                CheckKind::CheckRun,
+                true,
+                "pending",
+                "https://github.com/o/r/actions/runs/777/job/1",
+            ),
+            // Required and green, in the accepted conclusions.
+            ctx("ci/test", CheckKind::Status, true, "success", ""),
+            ctx(
+                "lint",
+                CheckKind::CheckRun,
+                true,
+                "neutral",
+                "https://github.com/o/r/actions/runs/1/job/2",
+            ),
+            ctx("docs", CheckKind::CheckRun, true, "skipped", ""),
+            // Not required: ignored even when red.
+            ctx("optional", CheckKind::CheckRun, false, "failure", ""),
         ],
     };
-    assert!(check_required_statuses(&combined, "digger/apply").is_ok());
-    let blocked = CombinedStatus {
-        state: "pending".into(),
-        statuses: vec![StatusEntry {
-            context: "ci/lint".into(),
-            state: "pending".into(),
-        }],
+    assert!(check_blocked(&req, Some("777")).is_ok());
+    // No review rule at all.
+    let none = MergeRequirements {
+        review_decision: None,
+        contexts: vec![],
     };
-    let err = check_required_statuses(&blocked, "digger/apply").unwrap_err();
+    assert!(check_blocked(&none, None).is_ok());
+}
+
+#[test]
+fn blocked_pr_is_denied_for_reviews_and_required_checks() {
+    let req = MergeRequirements {
+        review_decision: Some("REVIEW_REQUIRED".into()),
+        contexts: vec![
+            ctx("ci/lint", CheckKind::Status, true, "pending", ""),
+            ctx(
+                "build",
+                CheckKind::CheckRun,
+                true,
+                "failure",
+                "https://github.com/o/r/actions/runs/1/job/2",
+            ),
+            ctx(
+                "slow",
+                CheckKind::CheckRun,
+                true,
+                "pending",
+                "https://github.com/o/r/actions/runs/2/job/3",
+            ),
+        ],
+    };
+    let err = check_blocked(&req, Some("777")).unwrap_err();
+    assert!(err.contains("required reviews are missing"), "{}", err);
     assert!(err.contains("ci/lint (pending)"), "{}", err);
+    assert!(err.contains("build (failure)"), "{}", err);
+    assert!(err.contains("slow (pending)"), "{}", err);
+
+    let changes = MergeRequirements {
+        review_decision: Some("CHANGES_REQUESTED".into()),
+        contexts: vec![],
+    };
+    let err = check_blocked(&changes, None).unwrap_err();
+    assert!(err.contains("changes were requested"), "{}", err);
+
+    // Without a run id nothing is treated as our own job: a pending
+    // required check run is a blocker.
+    let own_job = MergeRequirements {
+        review_decision: None,
+        contexts: vec![ctx(
+            "nikama",
+            CheckKind::CheckRun,
+            true,
+            "pending",
+            "https://github.com/o/r/actions/runs/777/job/1",
+        )],
+    };
+    assert!(check_blocked(&own_job, None).is_err());
+    assert!(check_blocked(&own_job, Some("777")).is_ok());
+    assert!(check_blocked(&own_job, Some("778")).is_err());
 }
 
 fn plan_result(empty: bool) -> JobResult {

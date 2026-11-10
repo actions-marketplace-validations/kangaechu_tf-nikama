@@ -1,6 +1,6 @@
 //! GitHub REST client tests against a local mock server.
 
-use super::client::GithubClient;
+use super::client::{CheckKind, GithubClient};
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -305,4 +305,68 @@ async fn get_file_returns_raw_text_or_none() {
     );
     assert_eq!(c.get_file("missing.yml", "main").await.unwrap(), None);
     assert_eq!(c.default_branch().await.unwrap(), "trunk");
+}
+
+#[tokio::test]
+async fn merge_requirements_reads_graphql_rollup() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .and(body_partial_json(json!({"variables": {"owner": "o", "repo": "r", "number": 9}})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {"repository": {"pullRequest": {
+                "reviewDecision": "REVIEW_REQUIRED",
+                "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
+                    {"__typename": "CheckRun", "name": "build", "status": "COMPLETED", "conclusion": "FAILURE",
+                     "detailsUrl": "https://github.com/o/r/actions/runs/1/job/2", "isRequired": true},
+                    {"__typename": "CheckRun", "name": "nikama", "status": "IN_PROGRESS", "conclusion": null,
+                     "detailsUrl": "https://github.com/o/r/actions/runs/7/job/8", "isRequired": true},
+                    {"__typename": "StatusContext", "context": "digger/apply", "state": "PENDING",
+                     "targetUrl": "http://run", "isRequired": true},
+                    {"__typename": "StatusContext", "context": "ci/opt", "state": "SUCCESS",
+                     "targetUrl": null, "isRequired": false}
+                ]}}}}]}
+            }}}
+        })))
+        .mount(&server)
+        .await;
+    let req = client(&server).await.merge_requirements(9).await.unwrap();
+    assert_eq!(req.review_decision.as_deref(), Some("REVIEW_REQUIRED"));
+    let got: Vec<(&str, CheckKind, bool, &str)> = req
+        .contexts
+        .iter()
+        .map(|c| (c.name.as_str(), c.kind, c.required, c.state.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            ("build", CheckKind::CheckRun, true, "failure"),
+            ("nikama", CheckKind::CheckRun, true, "pending"),
+            ("digger/apply", CheckKind::Status, true, "pending"),
+            ("ci/opt", CheckKind::Status, false, "success"),
+        ]
+    );
+    assert_eq!(
+        req.contexts[1].details_url,
+        "https://github.com/o/r/actions/runs/7/job/8"
+    );
+}
+
+#[tokio::test]
+async fn merge_requirements_surfaces_graphql_errors() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "data": {"repository": null},
+            "errors": [{"message": "Could not resolve to a Repository"}]
+        })))
+        .mount(&server)
+        .await;
+    let err = client(&server)
+        .await
+        .merge_requirements(1)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("Could not resolve"), "{}", err);
 }

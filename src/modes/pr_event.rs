@@ -177,7 +177,7 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     // Apply preconditions.
     let has_apply = runnable.iter().any(|j| matches!(j.command, Command::Apply));
     if has_apply {
-        if let Err(reason) = apply_allowed(&github, &pr, &runnable, status_context).await {
+        if let Err(reason) = apply_allowed(&github, &pr, &runnable).await {
             tracing::error!(%reason, "apply not allowed");
             let r2 = reason.clone();
             writer.update(move |r| {
@@ -907,30 +907,48 @@ pub(super) fn apply_gate(pr: &crate::github::PrInfo, jobs: &[Job]) -> ApplyGate 
     }
 }
 
-/// When branch protection blocks the PR, accept if every *other* commit
-/// status is green (our own contexts are ignored).
-pub(super) fn check_required_statuses(
-    combined: &crate::github::client::CombinedStatus,
-    own_context: &str,
+/// When branch protection reports the pull request as `blocked`, accept only
+/// if the sole blocker is nikama itself: the review decision must not demand
+/// reviews, and every *required* check run or status other than our own
+/// contexts (`digger/*`, `nikama/*`) and the jobs of the current workflow run
+/// must have passed. Non-required checks are ignored, as branch protection
+/// ignores them.
+pub(super) fn check_blocked(
+    req: &crate::github::client::MergeRequirements,
+    own_run_id: Option<&str>,
 ) -> Result<(), String> {
-    let bad: Vec<String> = combined
-        .statuses
+    let mut reasons: Vec<String> = Vec::new();
+    match req.review_decision.as_deref() {
+        Some("REVIEW_REQUIRED") => reasons.push("required reviews are missing".into()),
+        Some("CHANGES_REQUESTED") => reasons.push("changes were requested".into()),
+        _ => {}
+    }
+    let own_run = own_run_id
+        .filter(|id| !id.is_empty())
+        .map(|id| format!("/actions/runs/{}/", id));
+    let bad: Vec<String> = req
+        .contexts
         .iter()
-        .filter(|s| {
-            s.context != own_context
-                && !s.context.starts_with("digger/")
-                && !s.context.starts_with("nikama/")
+        .filter(|c| c.required)
+        .filter(|c| !(c.name.starts_with("digger/") || c.name.starts_with("nikama/")))
+        .filter(|c| {
+            !own_run
+                .as_ref()
+                .is_some_and(|r| c.details_url.contains(r.as_str()))
         })
-        .filter(|s| s.state != "success")
-        .map(|s| format!("{} ({})", s.context, s.state))
+        .filter(|c| !matches!(c.state.as_str(), "success" | "neutral" | "skipped"))
+        .map(|c| format!("{} ({})", c.name, c.state))
         .collect();
-    if bad.is_empty() {
+    if !bad.is_empty() {
+        reasons.push(format!(
+            "required checks have not passed: {}",
+            bad.join(", ")
+        ));
+    }
+    if reasons.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "pull request is blocked by required checks: {}",
-            bad.join(", ")
-        ))
+        Err(format!("pull request is blocked: {}", reasons.join("; ")))
     }
 }
 
@@ -996,7 +1014,6 @@ async fn apply_allowed(
     github: &GithubClient,
     pr: &crate::github::PrInfo,
     jobs: &[Job],
-    own_context: &str,
 ) -> Result<(), String> {
     let mut reasons: Vec<String> = Vec::new();
     match apply_gate(pr, jobs) {
@@ -1005,11 +1022,12 @@ async fn apply_allowed(
         ApplyGate::Denied(reason) if pr.state == "closed" => return Err(reason),
         ApplyGate::Denied(reason) => reasons.push(reason),
         ApplyGate::CheckStatuses => {
-            let combined = github
-                .combined_status(&pr.head_sha)
+            let req = github
+                .merge_requirements(pr.number)
                 .await
-                .map_err(|e| format!("could not read commit status: {}", e))?;
-            if let Err(reason) = check_required_statuses(&combined, own_context) {
+                .map_err(|e| format!("could not read the branch protection state: {}", e))?;
+            let own_run = crate::util::env_opt("GITHUB_RUN_ID");
+            if let Err(reason) = check_blocked(&req, own_run.as_deref()) {
                 reasons.push(reason);
             }
         }
