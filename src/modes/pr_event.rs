@@ -490,6 +490,13 @@ pub(super) async fn build_trigger(
                     .await;
                 return Ok(None);
             }
+            if let Some(reason) = draft_pr_rejection(&pr, command, config.allow_draft_prs) {
+                tracing::info!(command = %command, "rejecting command on a draft pull request");
+                let _ = github
+                    .create_comment(pr_number, &format!("**nikama**: {}", reason))
+                    .await;
+                return Ok(None);
+            }
             let files = github.changed_files(pr_number).await.map_err(|e| {
                 tracing::error!(error = %e, "could not list changed files");
                 exit::EVENT
@@ -807,6 +814,25 @@ pub(super) fn closed_pr_rejection(pr: &crate::github::PrInfo, command: Command) 
     Some(format!(
         "this pull request is {}; `{}` is not run on closed pull requests (only `nikama unlock` is accepted).",
         state, command
+    ))
+}
+
+/// Why a comment command is refused on a draft pull request, if it is.
+///
+/// With `allow_draft_prs: false` a draft takes no locks and runs nothing from
+/// `pull_request` events, so comment commands follow the same rule: only
+/// `unlock` is accepted until the pull request is marked ready for review.
+pub(super) fn draft_pr_rejection(
+    pr: &crate::github::PrInfo,
+    command: Command,
+    allow_draft_prs: bool,
+) -> Option<String> {
+    if !pr.draft || allow_draft_prs || command == Command::Unlock {
+        return None;
+    }
+    Some(format!(
+        "this pull request is a draft; `{}` is not run on draft pull requests while `allow_draft_prs` is false (only `nikama unlock` is accepted).",
+        command
     ))
 }
 

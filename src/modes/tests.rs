@@ -2,8 +2,8 @@
 
 use super::pr_event::{
     acquire_locks, all_plans_empty, apply_gate, check_approved, check_required_statuses,
-    check_undiverged, closed_pr_rejection, required_checks, set_noop_statuses, summarize,
-    sweep_locks, ApplyGate,
+    check_undiverged, closed_pr_rejection, draft_pr_rejection, required_checks, set_noop_statuses,
+    summarize, sweep_locks, ApplyGate,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -924,6 +924,24 @@ fn comment_commands_on_closed_prs() {
     assert!(closed_pr_rejection(&merged, Command::Unlock).is_none());
 }
 
+#[test]
+fn comment_commands_on_draft_prs() {
+    let mut draft = pr(false, "open", None, None);
+    draft.draft = true;
+    let open = pr(false, "open", Some(true), Some("clean"));
+    for c in [Command::Plan, Command::Apply, Command::Lock] {
+        let r = draft_pr_rejection(&draft, c, false).unwrap();
+        assert!(r.contains("is a draft"), "{}", r);
+        assert!(r.contains(&format!("`{}`", c)), "{}", r);
+        assert!(r.contains("`nikama unlock`"), "{}", r);
+        // allow_draft_prs lifts the restriction; non-drafts are never affected.
+        assert!(draft_pr_rejection(&draft, c, true).is_none(), "{:?}", c);
+        assert!(draft_pr_rejection(&open, c, false).is_none(), "{:?}", c);
+    }
+    // Unlock is always accepted.
+    assert!(draft_pr_rejection(&draft, Command::Unlock, false).is_none());
+}
+
 #[tokio::test]
 async fn plan_comment_on_merged_pr_is_rejected_with_a_comment() {
     use super::pr_event::build_trigger;
@@ -1080,4 +1098,46 @@ async fn comment_command_from_writer_proceeds() {
     assert_eq!(trigger.jobs.len(), 1);
     assert_eq!(trigger.jobs[0].command, Command::Plan);
     assert_eq!(trigger.jobs[0].requested_by, "alice");
+}
+
+#[tokio::test]
+async fn plan_comment_on_draft_pr_is_rejected_with_a_comment() {
+    use super::pr_event::build_trigger;
+    use crate::github::GithubClient;
+    use wiremock::matchers::body_string_contains;
+    let server = MockServer::start().await;
+    mock_role(&server, "alice", "write").await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/5"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "head": {"ref": "feat", "sha": "abc"}, "base": {"ref": "main", "sha": "def"},
+            "user": {"login": "alice"},
+            "merged": false, "state": "open", "draft": true
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/5/comments"))
+        .and(body_string_contains("this pull request is a draft"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": 1})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str("projects:\n  - name: a\n    dir: a\n", tmp.path()).unwrap();
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+
+    let result = build_trigger(&config, &comment_context("alice", "digger plan"), &github).await;
+    assert!(
+        matches!(result, Ok(None)),
+        "{:?}",
+        result.map(|t| t.is_some())
+    );
+    // The changed-files endpoint was never called: rejection happens first.
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|r| !r.url.path().ends_with("/files")));
 }
