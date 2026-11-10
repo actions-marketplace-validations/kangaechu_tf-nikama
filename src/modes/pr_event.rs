@@ -29,7 +29,7 @@ pub(super) struct Trigger {
     /// Number of projects impacted by the PR.
     pub(super) impacted: usize,
     /// Would this event normally plan or apply? When it does and there is
-    /// nothing to do, the commit statuses are still set (DESIGN.md §13).
+    /// nothing to do, the commit statuses are still set.
     pub(super) expects_plan_or_apply: bool,
 }
 
@@ -321,7 +321,7 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
 }
 
 /// `true` when every job succeeded, at least one was a plan, and no plan has
-/// changes (DESIGN.md §13: `digger/apply` may be set to success).
+/// changes, so `digger/apply` may be set to success.
 pub(super) fn all_plans_empty(results: &[JobResult]) -> bool {
     let mut plans = 0;
     for r in results {
@@ -541,7 +541,7 @@ fn lockable(job: &Job) -> bool {
     )
 }
 
-/// Take the locks for `jobs` (DESIGN.md §9.3).
+/// Take the locks for `jobs`.
 ///
 /// Locks are checked first and then acquired in job order, which follows the
 /// configuration order, so two PRs contending for the same projects always
@@ -697,7 +697,7 @@ pub(super) async fn acquire_locks(locker: &PrLocker, pr: u64, jobs: Vec<Job>) ->
 }
 
 /// Release every lock under `namespace` held by `pr` except `keep`
-/// (DESIGN.md §9.2, dangling locks). Returns the released project names.
+/// (dangling locks). Returns the released project names.
 pub(super) async fn sweep_locks(
     locker: &PrLocker,
     storage: &dyn crate::storage::PlanStorage,

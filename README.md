@@ -113,8 +113,7 @@ concurrency:
   max_parallel: 4
 ```
 
-See [`examples/nikama.yml`](examples/nikama.yml) for the full schema and
-[`docs/DESIGN.md`](docs/DESIGN.md) for the design.
+See [`examples/nikama.yml`](examples/nikama.yml) for the full schema.
 
 Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
 

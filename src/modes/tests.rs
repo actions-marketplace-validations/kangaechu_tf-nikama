@@ -607,7 +607,7 @@ async fn unhandled_events_are_a_noop() {
 }
 
 // ---------------------------------------------------------------------------
-// Lock acquisition (DESIGN.md §9.3) and the dangling-lock sweep (§9.2).
+// Lock acquisition and the dangling-lock sweep.
 
 use crate::lock::testing::MemLock;
 use crate::lock::{Lock, PrLocker};
@@ -804,7 +804,7 @@ async fn sweep_releases_only_this_prs_other_locks() {
 }
 
 // ---------------------------------------------------------------------------
-// Commit statuses when there is nothing to do (DESIGN.md §13).
+// Commit statuses when there is nothing to do.
 
 #[test]
 fn all_plans_empty_decisions() {
