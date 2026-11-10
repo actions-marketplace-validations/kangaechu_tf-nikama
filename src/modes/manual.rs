@@ -80,6 +80,14 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
             exit::OK
         }
         Ok(Outcome::Apply(a)) | Ok(Outcome::Destroy(a)) => {
+            if let Some(p) = &a.pre_plan {
+                println!(
+                    "\n==== plan before apply: {} ({}) ====\n{}\n",
+                    project_name,
+                    p.summary.short(),
+                    p.plan_text
+                );
+            }
             println!("\n==== {}: {} ====\n{}\n", command, project_name, a.output);
             exit::OK
         }

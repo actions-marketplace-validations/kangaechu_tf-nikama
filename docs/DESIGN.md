@@ -484,7 +484,9 @@ plan と同じく `max_parallel` で並列。通知は完了順ではなくプ�
 - S3: `AWS_S3_BUCKET`、`PLAN_UPLOAD_S3_ENCRYPTION_ENABLED`、`PLAN_UPLOAD_S3_ENCRYPTION_TYPE` (`AES256` / `KMS`)、`PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID`。現行と同名。
 - キー: `<owner>-<repo>-<pr>-<project>.tfplan`（現行互換）。
 - plan 後に保存、apply 前に取得、unlock 時に削除。
-- ストレージなしの場合、apply は plan ファイルなしで実行する（現行互換。コメントに「plan file not stored, applying fresh」と注記する）。
+- apply は常に plan ファイルから実行する（plan ファイルなしの `apply -auto-approve` は行わない）。
+  - ストレージあり: 保存済み plan を取得して apply。見つからなければジョブを失敗させる（「no stored plan found for this pull request; run `nikama plan` first」）。apply 成功後に削除するので、再 apply には再 plan が必要。
+  - ストレージなし: apply の直前に plan ステージを実行し、その plan ファイルで apply する。適用した plan の要約をコメントの該当行と Notes に出す（現行は plan ファイルなしで apply していたが、本ツールでは適用内容を必ず記録する）。init と plan が 1 回余計に走る。
 
 ---
 

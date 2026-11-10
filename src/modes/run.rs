@@ -130,6 +130,15 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
                 row.detail_kind = Some(DetailKind::Apply);
                 row.detail = Some(a.output.clone());
                 row.additional_output = a.additional_output.clone();
+                if let Some(p) = &a.pre_plan {
+                    row.plan_summary = Some(p.summary.clone());
+                    row.summary_table = Some(plan_summary_table(&p.summary));
+                    r.notes.push(format!(
+                        "{}: no plan storage configured; planned immediately before apply ({})",
+                        n,
+                        p.summary.short()
+                    ));
+                }
             });
         }
         Ok(Outcome::Locked) => ctx.update(move |r| r.row_mut(&n).status = RowStatus::Locked),
@@ -228,27 +237,35 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                 .map_err(|e| format!("AWS credentials: {}", e))?;
             let exec = ctx.executor(job);
             std::fs::create_dir_all(&exec.work_dir).map_err(|e| e.to_string())?;
-            let plan_path = if ctx.storage.is_noop() {
-                None
+            // Apply always runs from a plan file. With plan storage the file
+            // is the one reviewed in the PR; a missing file is an error, never
+            // a blind `apply -auto-approve`. Without plan storage, plan right
+            // now and apply exactly that file so the applied changes are
+            // recorded in the report.
+            let (plan_path, pre_plan) = if ctx.storage.is_noop() {
+                tracing::info!(project = %job.project.name, "no plan storage configured; planning before apply");
+                let plan = exec.plan().await.map_err(|e| format_exec_error(&e))?;
+                (plan.plan_file.clone(), Some(plan))
             } else {
                 match ctx.storage.retrieve(&job.plan_file_name()).await {
                     Ok(Some(bytes)) => {
                         let p = exec.plan_file();
                         std::fs::write(&p, bytes).map_err(|e| e.to_string())?;
-                        Some(p)
+                        (p, None)
                     }
-                    Ok(None) => {
-                        tracing::warn!(project = %job.project.name, "no stored plan found; applying without a plan file");
-                        None
-                    }
+                    Ok(None) => return Err(format!(
+                        "no stored plan found for this pull request ({}); run `nikama plan` first",
+                        job.plan_file_name()
+                    )),
                     Err(e) => return Err(format!("could not retrieve stored plan: {}", e)),
                 }
             };
-            let result = exec
-                .apply(plan_path.as_deref())
+            let mut result = exec
+                .apply(Some(&plan_path))
                 .await
                 .map_err(|e| format_exec_error(&e))?;
-            if plan_path.is_some() {
+            result.pre_plan = pre_plan;
+            if !ctx.storage.is_noop() {
                 let _ = ctx.storage.delete(&job.plan_file_name()).await;
             }
             Ok(Outcome::Apply(result))

@@ -350,3 +350,113 @@ async fn run_by_levels_skips_dependents_of_failed_jobs() {
     );
     assert!(results[2].outcome.is_err());
 }
+
+/// Plan storage that is configured (not noop) but holds nothing.
+struct EmptyStorage;
+
+#[async_trait::async_trait]
+impl crate::storage::PlanStorage for EmptyStorage {
+    async fn store(&self, _key: &str, _bytes: &[u8]) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn retrieve(&self, _key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+    async fn delete(&self, _key: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn exists(&self, _key: &str) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    fn name(&self) -> &'static str {
+        "empty"
+    }
+}
+
+fn demo_fixture(dir_exists: bool) -> (tempfile::TempDir, Arc<crate::config::Config>) {
+    let tmp = tempfile::tempdir().unwrap();
+    if dir_exists {
+        std::fs::create_dir_all(tmp.path().join("infra/demo")).unwrap();
+        std::fs::write(
+            tmp.path().join("infra/demo/main.tf"),
+            "resource \"terraform_data\" \"demo\" {\n  input = \"hello\"\n}\n",
+        )
+        .unwrap();
+    }
+    let config = Arc::new(
+        load_from_str(
+            "projects:\n  - name: demo\n    dir: infra/demo\n",
+            tmp.path(),
+        )
+        .unwrap(),
+    );
+    (tmp, config)
+}
+
+fn demo_apply_job(config: &crate::config::Config) -> Job {
+    let p = &config.projects[0];
+    Job::new(
+        p,
+        config.workflow_for(p),
+        Command::Apply,
+        Some(1),
+        "x",
+        "me",
+        "o/r",
+        "",
+        "",
+    )
+}
+
+#[tokio::test]
+async fn apply_fails_when_storage_has_no_plan() {
+    let (tmp, config) = demo_fixture(false);
+    let ctx = RunContext {
+        config: config.clone(),
+        repo_root: tmp.path().to_path_buf(),
+        work_root: tmp.path().join("work"),
+        init_lock: None,
+        storage: Arc::new(EmptyStorage),
+        locker: None,
+        writer: None,
+        max_parallel: 1,
+    };
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    let err = result.outcome.unwrap_err();
+    assert!(err.contains("no stored plan found"), "{}", err);
+    assert!(err.contains("o-r-1-demo.tfplan"), "{}", err);
+    assert!(err.contains("run `nikama plan` first"), "{}", err);
+}
+
+#[tokio::test]
+async fn apply_without_storage_plans_first_and_reports_it() {
+    if std::process::Command::new("terraform")
+        .arg("version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skipping: terraform not found on PATH");
+        return;
+    }
+    let (tmp, config) = demo_fixture(true);
+    let ctx = RunContext {
+        config: config.clone(),
+        repo_root: tmp.path().to_path_buf(),
+        work_root: tmp.path().join("work"),
+        init_lock: None,
+        storage: Arc::new(NoopPlanStorage),
+        locker: None,
+        writer: None,
+        max_parallel: 1,
+    };
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    let Ok(Outcome::Apply(a)) = result.outcome else {
+        panic!("expected apply outcome: {:?}", result.outcome);
+    };
+    let pre = a.pre_plan.expect("plan produced before apply");
+    assert_eq!(pre.summary.create, 1);
+    assert!(pre.plan_file.exists());
+    assert!(a.output.contains("Apply complete!"), "{}", a.output);
+    assert_eq!(a.summary.map(|s| s.added), Some(1));
+}

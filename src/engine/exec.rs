@@ -61,6 +61,10 @@ pub struct ApplyResult {
     pub summary: Option<ApplySummary>,
     pub additional_output: Option<String>,
     pub steps: Vec<StepLog>,
+    /// Plan produced immediately before this apply when no stored plan was
+    /// available (plan storage not configured). `None` when the apply used a
+    /// stored plan file.
+    pub pre_plan: Option<PlanResult>,
 }
 
 /// Runs the stages of one job.
@@ -358,6 +362,7 @@ impl<'a> JobExecutor<'a> {
             summary,
             additional_output: self.take_additional_output(),
             steps,
+            pre_plan: None,
         })
     }
 
@@ -390,6 +395,7 @@ impl<'a> JobExecutor<'a> {
             output: cleanup_apply_output(&out.stdout),
             additional_output: self.take_additional_output(),
             steps,
+            pre_plan: None,
         })
     }
 }

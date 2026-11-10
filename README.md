@@ -119,6 +119,10 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    rejected.
 6. Plans run in parallel (`concurrency.max_parallel`); applies run level by
    level in dependency order. The comment is edited as projects finish.
+   An apply always uses a plan file: the stored one when plan storage is
+   configured (a missing stored plan fails the job instead of applying
+   blind), otherwise a plan produced immediately before the apply, whose
+   summary is shown in the comment.
 7. The commit status is set to success / failure; `auto_merge` merges the PR
    when every apply succeeded.
 

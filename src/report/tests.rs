@@ -88,6 +88,24 @@ fn apply_table_uses_apply_summary() {
     assert!(body.contains("| Project | Status | + | ~ | - |\n"));
     assert!(body.contains("| p | ✅ applied | 5 | 1 | 0 |"));
     assert!(body.contains("<b>p</b> · apply output"));
+    assert!(!body.contains("planned immediately before apply"));
+}
+
+#[test]
+fn apply_row_shows_pre_plan_table_when_present() {
+    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table);
+    let row = r.row_mut("p");
+    row.status = RowStatus::Applied;
+    row.detail_kind = Some(DetailKind::Apply);
+    row.detail = Some("Apply complete!".into());
+    row.summary_table = Some("| Resource | Action |\n|---|---|\n| `a.b` | ➕ create |\n".into());
+    r.notes.push(
+        "p: no plan storage configured; planned immediately before apply (+1 ~0 -0 ±0)".into(),
+    );
+    let body = r.render().remove(0);
+    assert!(body.contains("<summary>plan applied (planned immediately before apply)</summary>"));
+    assert!(body.contains("| `a.b` | ➕ create |"));
+    assert!(body.contains("**Notes**\n- p: no plan storage configured"));
 }
 
 #[test]
