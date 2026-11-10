@@ -5,7 +5,7 @@ use super::drift::{DriftNotifier, GithubIssueNotifier, SlackWebhook};
 use super::writer::ReportWriter;
 use super::COMMENT_MAX_CHARS;
 use crate::config::{CommentMode, ShowEmptyPlans};
-use crate::engine::{Command, PlanSummary};
+use crate::engine::{ApplySummary, Command, PlanSummary};
 use crate::github::GithubClient;
 use serde_json::json;
 use wiremock::matchers::{body_partial_json, method, path, path_regex};
@@ -77,7 +77,11 @@ fn apply_table_uses_apply_summary() {
     let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table);
     let row = r.row_mut("p");
     row.status = RowStatus::Applied;
-    row.apply_summary = Some((5, 1, 0));
+    row.apply_summary = Some(ApplySummary {
+        added: 5,
+        changed: 1,
+        ..Default::default()
+    });
     row.detail_kind = Some(DetailKind::Apply);
     row.detail = Some("Apply complete!".into());
     let body = r.render().remove(0);
