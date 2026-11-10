@@ -227,7 +227,7 @@ clap、serde / serde_yaml / serde_json、globset（doublestar 互換の `**` マ
 ### 5.4 generate_projects
 
 - トップレベル `include` / `exclude`（単一 glob）または `blocks[]`。両方の併用はエラー。
-- 対象ディレクトリ: `*.tf` を含むディレクトリ。`modules` という名前のディレクトリは除外。
+- 対象ディレクトリ: `*.tf` または `*.tofu` を含むディレクトリ。`modules` という名前のディレクトリは除外。
 - block: `block_name`、`include`、`exclude`、`include_patterns`、`exclude_patterns`、`opentofu`、`workflow`、`workspace`、`aws_role_to_assume`、`aws_cognito_oidc`、`drift_include_patterns`、`drift_exclude_patterns`。
 - 生成されるプロジェクト名はディレクトリパスの `/` を `_` に置換したもの。
 
