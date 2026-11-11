@@ -126,6 +126,7 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
         }
         Ok(Outcome::Apply(a)) | Ok(Outcome::Destroy(a)) => {
             let a = a.clone();
+            let extra_args = job.extra_args.clone();
             let destroyed = matches!(outcome, Ok(Outcome::Destroy(_)));
             ctx.update(move |r| {
                 let row = r.row_mut(&n);
@@ -141,9 +142,15 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
                 if let Some(p) = &a.pre_plan {
                     row.plan_summary = Some(p.summary.clone());
                     row.summary_table = Some(plan_summary_table(&p.summary));
+                    let with_args = if extra_args.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" with extra arguments `{}`", extra_args.join(" "))
+                    };
                     r.notes.push(format!(
-                        "{}: no plan storage configured; planned immediately before apply ({})",
+                        "{}: no plan storage configured; planned immediately before apply{} ({})",
                         n,
+                        with_args,
                         p.summary.short()
                     ));
                 }
@@ -262,9 +269,13 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
             if !ctx.storage.is_noop() {
                 match std::fs::read(&result.plan_file) {
                     Ok(bytes) => {
+                        let meta = crate::storage::PlanMeta {
+                            head_sha: ctx.head_sha.clone(),
+                            extra_args: job.extra_args.clone(),
+                        };
                         if let Err(e) = ctx
                             .storage
-                            .store(&job.plan_file_name(), &bytes, ctx.head_sha.as_deref())
+                            .store(&job.plan_file_name(), &bytes, &meta)
                             .await
                         {
                             return Err(format!(
@@ -308,6 +319,16 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                                 r.notes.push(format!(
                                     "{}: the stored plan carries no commit information (written by an older version); it could not be checked against the PR head",
                                     n
+                                ))
+                            });
+                        }
+                        if !stored.extra_args.is_empty() {
+                            let n = job.project.name.clone();
+                            let args = stored.extra_args.join(" ");
+                            ctx.update(move |r| {
+                                r.notes.push(format!(
+                                    "{}: applying a plan produced with extra arguments `{}`",
+                                    n, args
                                 ))
                             });
                         }

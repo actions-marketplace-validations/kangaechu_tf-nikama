@@ -33,6 +33,9 @@ pub(super) struct Trigger {
     pub(super) expects_plan_or_apply: bool,
     /// `--no-lock` was given on the comment.
     pub(super) no_lock_flag: bool,
+    /// Arguments after `--` on the comment, already checked against
+    /// `allowed_plan_args`; copied into every job.
+    pub(super) extra_args: Vec<String>,
 }
 
 pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: GithubClient) -> i32 {
@@ -439,6 +442,7 @@ pub(super) async fn build_trigger(
                 impacted: impacted.len(),
                 expects_plan_or_apply: selector == PrSelector::Pushed,
                 no_lock_flag: false,
+                extra_args: vec![],
             }))
         }
         "issue_comment" => {
@@ -514,6 +518,18 @@ pub(super) async fn build_trigger(
                     .await;
                 return Ok(None);
             }
+            if let Some(reason) = extra_args_rejection(
+                config,
+                command,
+                &cmd.extra_args,
+                crate::storage::configured(),
+            ) {
+                tracing::info!(command = %command, "rejecting extra arguments");
+                let _ = github
+                    .create_comment(pr_number, &format!("**nikama**: {}", reason))
+                    .await;
+                return Err(exit::COMMAND);
+            }
             let pr = github.get_pr(pr_number).await.map_err(|e| {
                 tracing::error!(error = %e, "could not fetch pull request");
                 exit::EVENT
@@ -551,7 +567,25 @@ pub(super) async fn build_trigger(
                 notes.push("no projects are impacted by this pull request".into());
             }
             let covers_all = selected.len() == impacted.len();
-            let jobs = jobs_for_comment(&event, config, &selected, command, &pr.head_ref);
+            let mut jobs = jobs_for_comment(&event, config, &selected, command, &pr.head_ref);
+            if !cmd.extra_args.is_empty() {
+                for j in &mut jobs {
+                    j.extra_args = cmd.extra_args.clone();
+                }
+                notes.push(format!(
+                    "`{}` runs with extra arguments `{}`{}",
+                    command,
+                    cmd.extra_args.join(" "),
+                    if command == Command::Plan && crate::storage::configured() {
+                        format!(
+                            "; `{} apply` applies this plan as it is",
+                            config.wakeup_word()
+                        )
+                    } else {
+                        String::new()
+                    }
+                ));
+            }
             // A bare `digger unlock` releases everything this PR holds; with
             // `-p` / `-d` only the selected projects are touched.
             let release_all_locks =
@@ -567,6 +601,7 @@ pub(super) async fn build_trigger(
                 impacted: impacted.len(),
                 expects_plan_or_apply: matches!(command, Command::Plan | Command::Apply),
                 no_lock_flag: cmd.no_lock,
+                extra_args: cmd.extra_args,
             }))
         }
         "merge_group" => {
@@ -929,6 +964,45 @@ pub(super) fn no_lock_reason(
         .iter()
         .any(|l| l.eq_ignore_ascii_case(label))
         .then(|| format!("label `{}`", label))
+}
+
+/// Why arguments after `--` are refused, if they are: the feature is off
+/// (`allowed_plan_args` empty), an argument matches no pattern, or the
+/// command is `apply` with plan storage configured, where the stored plan is
+/// applied as it is and planning options cannot be passed.
+pub(super) fn extra_args_rejection(
+    config: &Config,
+    command: Command,
+    extra_args: &[String],
+    storage_configured: bool,
+) -> Option<String> {
+    if extra_args.is_empty() {
+        return None;
+    }
+    if command == Command::Apply && storage_configured {
+        return Some(format!(
+            "`apply` applies the stored plan as it is, so arguments after `--` cannot be used here; pass them to `{} plan` instead.",
+            config.wakeup_word()
+        ));
+    }
+    if config.allowed_plan_args.is_empty() {
+        return Some(
+            "arguments after `--` are not enabled in this repository; set `allowed_plan_args` in nikama.yml to allow them.".to_string(),
+        );
+    }
+    match config.check_extra_args(extra_args) {
+        Ok(()) => None,
+        Err(arg) => Some(format!(
+            "argument `{}` is not allowed by `allowed_plan_args` ({}).",
+            arg,
+            config
+                .allowed_plan_args
+                .iter()
+                .map(|p| format!("`{}`", p))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 /// Why a comment command is refused on a draft pull request, if it is.

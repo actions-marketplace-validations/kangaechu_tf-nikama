@@ -76,6 +76,13 @@ no_lock_label: no-lock
 # followed transitively) as part of the project when computing impacted
 # projects. Default: false.
 autoplan_modules: true
+# Arguments a comment may pass to `terraform plan` after `--`
+# (`nikama plan -p app -- -target=module.vpc`). Each argument must match one
+# pattern on its own; `*` matches anything. Empty (default): `--` is refused.
+allowed_plan_args:
+  - "-target=*"
+  - "-replace=*"
+  - "-refresh=false"
 # Word(s) a PR comment must start with to be treated as a command. A string
 # or a list; the first one is used in help texts. Default: [nikama, digger].
 # wakeup_word: [nikama, digger]

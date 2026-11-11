@@ -97,6 +97,9 @@ pub struct Job {
     /// "backend-config" credential strategy.
     pub backend_config_args: Vec<String>,
     pub skip_merge_check: bool,
+    /// Arguments from a PR comment (`-- -target=...`) appended to `plan`
+    /// as given, without environment expansion.
+    pub extra_args: Vec<String>,
 }
 
 impl Job {
@@ -134,6 +137,7 @@ impl Job {
             command_env,
             backend_config_args: vec![],
             skip_merge_check,
+            extra_args: vec![],
         }
     }
 

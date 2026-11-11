@@ -369,10 +369,33 @@ pub struct Config {
     /// `autoplan_modules`: changes to referenced local modules impact the
     /// project (see `Project::module_dirs`).
     pub autoplan_modules: bool,
+    /// Patterns (`*` matches any run of characters) for arguments a comment
+    /// may pass to `terraform plan` after `--`. Empty: feature off.
+    pub allowed_plan_args: Vec<String>,
     pub graph: DependencyGraph,
 }
 
 impl Config {
+    /// Check arguments given after `--` on a comment against
+    /// `allowed_plan_args`. Each argument must match a pattern on its own, so
+    /// write values in the `-flag=value` form. Returns the first offending
+    /// argument.
+    pub fn check_extra_args<'a>(&self, args: &'a [String]) -> Result<(), &'a str> {
+        let mut b = globset::GlobSetBuilder::new();
+        for p in &self.allowed_plan_args {
+            let mut g = globset::GlobBuilder::new(p);
+            g.literal_separator(false);
+            if let Ok(glob) = g.build() {
+                b.add(glob);
+            }
+        }
+        let set = b.build().map_err(|_| "")?;
+        match args.iter().find(|a| !set.is_match(a.as_str())) {
+            Some(a) => Err(a.as_str()),
+            None => Ok(()),
+        }
+    }
+
     /// The wakeup word shown in help texts and comments.
     pub fn wakeup_word(&self) -> &str {
         &self.wakeup_words[0]

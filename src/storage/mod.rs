@@ -13,6 +13,60 @@ use std::sync::Arc;
 /// produced from (`x-amz-meta-head-sha` on S3).
 pub const HEAD_SHA_METADATA_KEY: &str = "head-sha";
 
+/// Name of the object metadata entry holding the comment arguments the plan
+/// was produced with (`x-amz-meta-plan-args` on S3), as an ASCII-only JSON
+/// array.
+pub const PLAN_ARGS_METADATA_KEY: &str = "plan-args";
+
+/// What is recorded next to a plan file.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlanMeta {
+    /// PR head commit the plan was produced from.
+    pub head_sha: Option<String>,
+    /// Arguments given after `--` on the comment that produced the plan.
+    pub extra_args: Vec<String>,
+}
+
+impl PlanMeta {
+    /// Object metadata entries for this plan.
+    pub fn to_metadata(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        if let Some(sha) = &self.head_sha {
+            out.push((HEAD_SHA_METADATA_KEY, sha.clone()));
+        }
+        if !self.extra_args.is_empty() {
+            out.push((PLAN_ARGS_METADATA_KEY, encode_args(&self.extra_args)));
+        }
+        out
+    }
+}
+
+/// Encode comment arguments for object metadata: JSON with every non-ASCII
+/// character escaped, since S3 metadata values must be US-ASCII.
+pub fn encode_args(args: &[String]) -> String {
+    let json = serde_json::to_string(args).unwrap_or_else(|_| "[]".to_string());
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if c.is_ascii() {
+            out.push(c);
+        } else {
+            let mut buf = [0u16; 2];
+            for unit in c.encode_utf16(&mut buf) {
+                out.push_str(&format!("\\u{:04x}", unit));
+            }
+        }
+    }
+    out
+}
+
+/// Decode what [`encode_args`] wrote; anything unreadable is treated as no
+/// arguments.
+pub fn decode_args(value: Option<&str>) -> Vec<String> {
+    value
+        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+        .unwrap_or_default()
+}
+
 /// A stored plan file together with the commit it was produced from.
 /// `head_sha` is `None` for plans written without metadata (older versions
 /// of this tool, or Digger).
@@ -20,12 +74,15 @@ pub const HEAD_SHA_METADATA_KEY: &str = "head-sha";
 pub struct StoredPlan {
     pub bytes: Vec<u8>,
     pub head_sha: Option<String>,
+    /// Comment arguments the plan was produced with (empty when none or
+    /// when written by an older version).
+    pub extra_args: Vec<String>,
 }
 
 #[async_trait]
 pub trait PlanStorage: Send + Sync {
-    /// Store `bytes` under `key`, recording `head_sha` when given.
-    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()>;
+    /// Store `bytes` under `key`, recording `meta` with it.
+    async fn store(&self, key: &str, bytes: &[u8], meta: &PlanMeta) -> anyhow::Result<()>;
     async fn retrieve(&self, key: &str) -> anyhow::Result<Option<StoredPlan>>;
     async fn delete(&self, key: &str) -> anyhow::Result<()>;
     async fn exists(&self, key: &str) -> anyhow::Result<bool>;
@@ -40,12 +97,7 @@ pub struct NoopPlanStorage;
 
 #[async_trait]
 impl PlanStorage for NoopPlanStorage {
-    async fn store(
-        &self,
-        _key: &str,
-        _bytes: &[u8],
-        _head_sha: Option<&str>,
-    ) -> anyhow::Result<()> {
+    async fn store(&self, _key: &str, _bytes: &[u8], _meta: &PlanMeta) -> anyhow::Result<()> {
         Ok(())
     }
     async fn retrieve(&self, _key: &str) -> anyhow::Result<Option<StoredPlan>> {
@@ -63,6 +115,18 @@ impl PlanStorage for NoopPlanStorage {
     fn is_noop(&self) -> bool {
         true
     }
+}
+
+/// Whether `PLAN_UPLOAD_DESTINATION` names a real storage (not empty or
+/// `none`), without creating a client.
+pub fn configured() -> bool {
+    !matches!(
+        crate::util::env_opt("PLAN_UPLOAD_DESTINATION")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "" | "none"
+    )
 }
 
 /// Create the plan storage from `PLAN_UPLOAD_DESTINATION` (`aws`, `gcp` or
@@ -111,5 +175,36 @@ pub async fn from_env() -> anyhow::Result<Arc<dyn PlanStorage>> {
             dest
         ),
         other => anyhow::bail!("unknown PLAN_UPLOAD_DESTINATION '{}'", other),
+    }
+}
+
+#[cfg(test)]
+mod meta_tests {
+    use super::*;
+
+    #[test]
+    fn args_round_trip_as_ascii_json() {
+        let args = vec![
+            "-target=module.x[\"日本\"]".to_string(),
+            "-var=emoji=😀".to_string(),
+        ];
+        let encoded = encode_args(&args);
+        assert!(encoded.is_ascii(), "{encoded}");
+        assert!(encoded.contains("\\u65e5\\u672c"));
+        assert_eq!(decode_args(Some(&encoded)), args);
+        assert!(decode_args(None).is_empty());
+        assert!(decode_args(Some("not json")).is_empty());
+        let meta = PlanMeta {
+            head_sha: Some("abc".into()),
+            extra_args: vec!["-refresh=false".into()],
+        };
+        assert_eq!(
+            meta.to_metadata(),
+            vec![
+                (HEAD_SHA_METADATA_KEY, "abc".to_string()),
+                (PLAN_ARGS_METADATA_KEY, "[\"-refresh=false\"]".to_string()),
+            ]
+        );
+        assert!(PlanMeta::default().to_metadata().is_empty());
     }
 }

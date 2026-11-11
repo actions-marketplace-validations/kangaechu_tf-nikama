@@ -265,7 +265,7 @@ impl<'a> JobExecutor<'a> {
                 }
                 Step::Plan { extra_args } => {
                     let out = runner
-                        .plan(extra_args, &env, &plan_file)
+                        .plan(extra_args, &self.job.extra_args, &env, &plan_file)
                         .await
                         .map_err(|e| io_err("plan", e))?;
                     steps.push(log("plan", &out));

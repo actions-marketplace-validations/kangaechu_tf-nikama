@@ -144,7 +144,33 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         }
     }
 
+    let mut allowed_plan_args = Vec::new();
+    for p in &raw.allowed_plan_args {
+        let p = p.trim();
+        if p.is_empty() {
+            return Err(ConfigError::Validation(
+                "allowed_plan_args entries must not be empty".to_string(),
+            ));
+        }
+        if !p.starts_with('-') {
+            return Err(ConfigError::Validation(format!(
+                "allowed_plan_args entry '{}' must start with '-' (a terraform flag such as -target=*)",
+                p
+            )));
+        }
+        globset::GlobBuilder::new(p)
+            .literal_separator(false)
+            .build()
+            .map_err(|e| {
+                ConfigError::Validation(format!("allowed_plan_args entry '{}': {}", p, e))
+            })?;
+        if !allowed_plan_args.iter().any(|x| x == p) {
+            allowed_plan_args.push(p.to_string());
+        }
+    }
+
     Ok(Config {
+        allowed_plan_args,
         allowed_providers,
         projects,
         workflows,

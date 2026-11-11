@@ -15,6 +15,9 @@ pub struct CommentCommand {
     pub dirs: Vec<String>,
     /// `--no-lock`: plan without taking project locks (plan only).
     pub no_lock: bool,
+    /// Everything after `--`, passed to `terraform plan` (plan and apply
+    /// only; see `allowed_plan_args`).
+    pub extra_args: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -27,6 +30,10 @@ pub enum CommentParseError {
     MissingValue(String),
     #[error("flag '{0}' is only accepted with `plan`")]
     FlagNotAllowed(String),
+    #[error("extra arguments after `--` are only accepted with `plan` and `apply`")]
+    ExtraArgsNotAllowed,
+    #[error("nothing follows `--`")]
+    EmptyExtraArgs,
 }
 
 /// Returns `None` when the comment is not addressed to this tool, that is
@@ -66,6 +73,7 @@ pub fn parse_comment(
                 projects: vec![],
                 dirs: vec![],
                 no_lock: false,
+                extra_args: vec![],
             }))
         }
     };
@@ -79,7 +87,21 @@ pub fn parse_comment(
     let mut projects = Vec::new();
     let mut dirs = Vec::new();
     let mut no_lock = false;
+    let mut extra_args = Vec::new();
     while let Some(tok) = iter.next() {
+        if tok == "--" {
+            if !matches!(
+                verb,
+                CommentVerb::Run(Command::Plan) | CommentVerb::Run(Command::Apply)
+            ) {
+                return Some(Err(CommentParseError::ExtraArgsNotAllowed));
+            }
+            extra_args.extend(iter.by_ref().filter(|t| !t.trim().is_empty()));
+            if extra_args.is_empty() {
+                return Some(Err(CommentParseError::EmptyExtraArgs));
+            }
+            break;
+        }
         let (flag, inline) = match tok.split_once('=') {
             Some((f, v)) if f.starts_with('-') => (f.to_string(), Some(v.to_string())),
             _ => (tok.clone(), None),
@@ -117,6 +139,7 @@ pub fn parse_comment(
         projects,
         dirs,
         no_lock,
+        extra_args,
     }))
 }
 
@@ -133,8 +156,10 @@ pub fn help_text(wakeup_words: &[String]) -> String {
 | `{w} plan` | Plan all projects impacted by this PR |
 | `{w} plan -p <project>` | Plan selected project(s); `-p` may be repeated, `-d <dir>` selects by directory |
 | `{w} plan --no-lock` | Plan without taking project locks (locks this PR already holds for the planned projects are released) |
+| `{w} plan -p <project> -- -target=<addr>` | Pass arguments after `--` to `terraform plan` (only those allowed by `allowed_plan_args`) |
 | `{w} apply` | Apply all impacted projects (PR must be mergeable) |
 | `{w} apply -p <project>` | Apply selected project(s) |
+| `{w} apply -p <project> -- -target=<addr>` | Without plan storage only: plan with these arguments immediately before applying |
 | `{w} lock` / `{w} unlock` | Acquire / release the PR-level lock for impacted projects |
 | `{w} help` | Show this message |"
     );
@@ -248,9 +273,39 @@ mod tests {
     }
 
     #[test]
+    fn parses_extra_args_after_double_dash() {
+        let c = parse("digger plan -p vpc --no-lock -- -target=module.a -var=\"x=a b\"")
+            .unwrap()
+            .unwrap();
+        assert_eq!(c.verb, CommentVerb::Run(Command::Plan));
+        assert_eq!(c.projects, vec!["vpc"]);
+        assert!(c.no_lock);
+        assert_eq!(c.extra_args, vec!["-target=module.a", "-var=x=a b"]);
+        // Flags after `--` are terraform's, not ours.
+        let c = parse("digger apply -- -p -target=x").unwrap().unwrap();
+        assert_eq!(c.verb, CommentVerb::Run(Command::Apply));
+        assert!(c.projects.is_empty());
+        assert_eq!(c.extra_args, vec!["-p", "-target=x"]);
+        assert!(parse("digger plan").unwrap().unwrap().extra_args.is_empty());
+        assert_eq!(
+            parse("digger plan --").unwrap(),
+            Err(CommentParseError::EmptyExtraArgs)
+        );
+        assert_eq!(
+            parse("digger unlock -- -target=x").unwrap(),
+            Err(CommentParseError::ExtraArgsNotAllowed)
+        );
+        assert_eq!(
+            parse("digger lock -- x").unwrap(),
+            Err(CommentParseError::ExtraArgsNotAllowed)
+        );
+    }
+
+    #[test]
     fn help_text_uses_the_configured_word() {
         let h = help_text(&words());
         assert!(h.contains("| `nikama plan` |"));
+        assert!(h.contains("| `nikama plan -p <project> -- -target=<addr>` |"));
         assert!(h.contains("`digger` can be used in place of `nikama`"));
 
         let h = help_text(&["tf".to_string()]);

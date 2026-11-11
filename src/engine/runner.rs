@@ -65,9 +65,16 @@ pub(crate) fn init_args(extra_args: &[String]) -> Vec<String> {
     args
 }
 
-pub(crate) fn plan_args(extra_args: &[String], plan_path: &Path) -> Vec<String> {
+/// `request_args` come from a PR comment and are passed literally (no
+/// environment expansion), after the workflow's `extra_args`.
+pub(crate) fn plan_args(
+    extra_args: &[String],
+    request_args: &[String],
+    plan_path: &Path,
+) -> Vec<String> {
     let mut args = vec!["plan".to_string()];
     args.extend(expand_args(extra_args));
+    args.extend(request_args.iter().cloned());
     args.extend([
         "-input=false".to_string(),
         "-no-color".to_string(),
@@ -155,10 +162,12 @@ impl IacRunner {
     pub async fn plan(
         &self,
         extra_args: &[String],
+        request_args: &[String],
         env: &BTreeMap<String, String>,
         plan_path: &Path,
     ) -> std::io::Result<CmdOutput> {
-        self.run(&plan_args(extra_args, plan_path), env, true).await
+        self.run(&plan_args(extra_args, request_args, plan_path), env, true)
+            .await
     }
 
     pub async fn apply(

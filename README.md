@@ -29,7 +29,7 @@ Supported in the first release:
   (no DynamoDB table needed), S3 plan storage, GitHub OIDC → STS role
   assumption, Cognito Identity
 - **Google Cloud**: Cloud Storage PR locks and plan storage (compatible with Digger's `gcp` lock and plan providers)
-- Comment commands: `nikama plan|apply|lock|unlock|help` (also `digger ...`; the wakeup word is configurable with `wakeup_word`), with `-p/--project`, `-d/--directory` and `plan --no-lock`; on a closed or merged PR only `unlock` is accepted
+- Comment commands: `nikama plan|apply|lock|unlock|help` (also `digger ...`; the wakeup word is configurable with `wakeup_word`), with `-p/--project`, `-d/--directory`, `plan --no-lock` and `-- <terraform arguments>` (allowlisted); on a closed or merged PR only `unlock` is accepted
 - Commit statuses `digger/plan` and `digger/apply`, optional auto-merge
 - Drift detection with Slack webhook or GitHub Issue notifications
 
@@ -355,9 +355,10 @@ with a warning. Unknown keys and keys for unsupported features are errors.
 Top-level keys: `projects`, `workflows`, `generate_projects`,
 `dependency_configuration`, `traverse_to_nested_projects`, `auto_merge`,
 `auto_merge_strategy`, `pr_locks`, `allow_draft_prs`, `no_lock_label`,
-`wakeup_word`, `autoplan_modules`, `drift_include_patterns`,
-`drift_exclude_patterns`, `concurrency`, `comment`, `allowed_providers` (plus
-`git_timeout` and `telemetry`, accepted for compatibility).
+`wakeup_word`, `autoplan_modules`, `allowed_plan_args`,
+`drift_include_patterns`, `drift_exclude_patterns`, `concurrency`, `comment`,
+`allowed_providers` (plus `git_timeout` and `telemetry`, accepted for
+compatibility).
 
 ### Base branch filter
 
@@ -424,6 +425,48 @@ entries and the manual-mode `command` input accept the configured words as
 well as the defaults, so `digger plan` keeps working there. Like every other
 key, `wakeup_word` is read from the trusted configuration when `config-ref` is
 set, so a pull request cannot change which comments start a run.
+
+### Extra arguments on comments
+
+Everything after `--` on a comment command is passed to `terraform plan`,
+after the `extra_args` of the workflow's plan step and without environment
+expansion:
+
+```
+nikama plan -p app -- -target=module.vpc
+nikama plan -p app -- -replace=aws_instance.web
+nikama plan -- -refresh=false
+```
+
+The feature is off until `nikama.yml` lists what may be passed. Every
+argument is checked on its own against the patterns, where `*` matches any
+run of characters, so write values in the `-flag=value` form:
+
+```yaml
+allowed_plan_args:
+  - "-target=*"
+  - "-replace=*"
+  - "-refresh=false"
+```
+
+An argument outside the list, or any argument while the list is empty, is
+refused with a comment and nothing runs. Like every other key,
+`allowed_plan_args` is read from the trusted configuration when `config-ref`
+is set. Leave out anything that changes where state lives or how it is
+locked (`-state=`, `-lock=false`, `-backend-config=`).
+
+The arguments go to every selected project, so pair `-target` and
+`-replace` with `-p`; a project where the address does not exist fails on its
+own row. `--no-lock` can be combined with `--`.
+
+How `apply` picks them up depends on plan storage:
+
+- With plan storage, the stored plan already carries the targeting, so
+  `nikama apply` applies it as it is; the run comment notes the arguments the
+  plan was produced with. `nikama apply -- ...` is refused, as Terraform
+  does not accept planning options together with a saved plan.
+- Without plan storage, `apply` plans immediately before applying, so give
+  it the same arguments: `nikama apply -p app -- -target=module.vpc`.
 
 ## Environment variables
 
