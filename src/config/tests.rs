@@ -451,42 +451,47 @@ fn names(ps: &[Project]) -> Vec<&str> {
 fn impacted_direct_matches() {
     let c = impact_config("soft");
     assert_eq!(
-        names(&impacted_projects(&c, &["infra/net/main.tf".into()])),
+        names(&impacted_projects(&c, &["infra/net/main.tf".into()], None)),
         vec!["net"]
     );
     assert_eq!(
-        names(&impacted_projects(&c, &["infra/app/sub/x.tf".into()])),
+        names(&impacted_projects(&c, &["infra/app/sub/x.tf".into()], None)),
         vec!["app"]
     );
     // include_patterns relative to dir and repository-relative.
     assert_eq!(
-        names(&impacted_projects(&c, &["infra/app/prod.tfvars".into()])),
+        names(&impacted_projects(
+            &c,
+            &["infra/app/prod.tfvars".into()],
+            None
+        )),
         vec!["app"]
     );
     assert_eq!(
-        names(&impacted_projects(&c, &["shared/vars.tf".into()])),
+        names(&impacted_projects(&c, &["shared/vars.tf".into()], None)),
         vec!["app"]
     );
     // exclude wins.
-    assert!(impacted_projects(&c, &["infra/app/README.md".into()]).is_empty());
-    assert!(impacted_projects(&c, &["unrelated.txt".into()]).is_empty());
+    assert!(impacted_projects(&c, &["infra/app/README.md".into()], None).is_empty());
+    assert!(impacted_projects(&c, &["unrelated.txt".into()], None).is_empty());
 }
 
 #[test]
 fn impacted_hard_mode_adds_dependents_in_config_order() {
     let c = impact_config("hard");
     assert_eq!(
-        names(&impacted_projects(&c, &["infra/net/main.tf".into()])),
+        names(&impacted_projects(&c, &["infra/net/main.tf".into()], None)),
         vec!["net", "app", "other"]
     );
     assert_eq!(
-        names(&impacted_projects(&c, &["docs/x.tf".into()])),
+        names(&impacted_projects(&c, &["docs/x.tf".into()], None)),
         vec!["docs"]
     );
     assert_eq!(
         names(&impacted_projects(
             &c,
-            &["other/x.tf".into(), "infra/app/a.tf".into()]
+            &["other/x.tf".into(), "infra/app/a.tf".into()],
+            None
         )),
         vec!["app", "other"]
     );
@@ -623,7 +628,7 @@ fn autoplan_modules_impacts_projects_through_local_modules() {
     let c = load_from_str(yaml, tmp.path()).unwrap();
     assert!(!c.autoplan_modules);
     assert!(c.projects[0].module_dirs.is_empty());
-    assert!(impacted_projects(&c, &["modules/subnet/main.tf".into()]).is_empty());
+    assert!(impacted_projects(&c, &["modules/subnet/main.tf".into()], None).is_empty());
 
     let c = load_from_str(&format!("{yaml}autoplan_modules: true\n"), tmp.path()).unwrap();
     assert!(c.autoplan_modules);
@@ -633,14 +638,22 @@ fn autoplan_modules_impacts_projects_through_local_modules() {
     );
     assert!(c.projects[1].module_dirs.is_empty());
     assert_eq!(
-        names(&impacted_projects(&c, &["modules/subnet/main.tf".into()])),
+        names(&impacted_projects(
+            &c,
+            &["modules/subnet/main.tf".into()],
+            None
+        )),
         vec!["app"]
     );
     assert_eq!(
-        names(&impacted_projects(&c, &["modules/vpc/README.md".into()])),
+        names(&impacted_projects(
+            &c,
+            &["modules/vpc/README.md".into()],
+            None
+        )),
         vec!["app"]
     );
-    assert!(impacted_projects(&c, &["modules/other/main.tf".into()]).is_empty());
+    assert!(impacted_projects(&c, &["modules/other/main.tf".into()], None).is_empty());
 }
 
 #[test]
@@ -660,7 +673,77 @@ fn autoplan_modules_applies_to_generated_projects() {
     assert_eq!(c.projects.len(), 1);
     assert_eq!(c.projects[0].module_dirs, vec!["modules/svc"]);
     assert_eq!(
-        names(&impacted_projects(&c, &["modules/svc/main.tf".into()])),
+        names(&impacted_projects(
+            &c,
+            &["modules/svc/main.tf".into()],
+            None
+        )),
         vec![c.projects[0].name.as_str()]
+    );
+}
+
+#[test]
+fn branch_is_a_regex_matched_against_the_base_branch() {
+    let c = load(
+        r#"
+projects:
+  - name: app-staging
+    dir: infra/app
+    workspace: staging
+    branch: ^develop$
+  - name: app-prod
+    dir: infra/app
+    workspace: prod
+    branch: ^(main|release/.*)$
+  - name: shared
+    dir: infra/shared
+  - name: downstream
+    dir: infra/downstream
+    depends_on: [shared]
+    branch: ^main$
+"#,
+    )
+    .unwrap();
+    assert_eq!(c.projects[0].branch.as_ref().unwrap().as_str(), "^develop$");
+    assert!(c.projects[2].branch.is_none());
+    // Empty / blank values mean "no filter".
+    let blank = load("projects:\n  - name: a\n    dir: a\n    branch: '  '\n").unwrap();
+    assert!(blank.projects[0].branch.is_none());
+
+    let files = vec!["infra/app/main.tf".to_string()];
+    assert_eq!(
+        names(&impacted_projects(&c, &files, Some("develop"))),
+        vec!["app-staging"]
+    );
+    assert_eq!(
+        names(&impacted_projects(&c, &files, Some("release/1.2"))),
+        vec!["app-prod"]
+    );
+    assert!(impacted_projects(&c, &files, Some("feature/x")).is_empty());
+    // No pull request (manual / drift): no filter.
+    assert_eq!(
+        names(&impacted_projects(&c, &files, None)),
+        vec!["app-staging", "app-prod"]
+    );
+    // Downstream dependents are filtered too (hard mode is the default).
+    let shared = vec!["infra/shared/main.tf".to_string()];
+    assert_eq!(
+        names(&impacted_projects(&c, &shared, Some("main"))),
+        vec!["shared", "downstream"]
+    );
+    assert_eq!(
+        names(&impacted_projects(&c, &shared, Some("develop"))),
+        vec!["shared"]
+    );
+}
+
+#[test]
+fn branch_must_be_a_valid_regex() {
+    let msg = err_msg(load(
+        "projects:\n  - name: a\n    dir: a\n    branch: '(main'\n",
+    ));
+    assert!(
+        msg.contains("project 'a': branch is not a valid regular expression"),
+        "{msg}"
     );
 }

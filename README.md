@@ -152,6 +152,8 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    (`dir/**`, `include_patterns`, `exclude_patterns`, plus downstream
    `depends_on` projects in `hard` mode). With `autoplan_modules: true`,
    local modules the project uses count as part of it (see "Local modules").
+   A project with a `branch` only counts for pull requests into a matching
+   base branch (see "Base branch filter").
 3. One run comment is posted immediately with every project as *pending*, and
    the commit status is set to *pending*.
 4. PR locks are checked for all projects up front and taken in configuration
@@ -348,6 +350,31 @@ Top-level keys: `projects`, `workflows`, `generate_projects`,
 `wakeup_word`, `autoplan_modules`, `drift_include_patterns`,
 `drift_exclude_patterns`, `concurrency`, `comment`, `allowed_providers` (plus
 `git_timeout` and `telemetry`, accepted for compatibility).
+
+### Base branch filter
+
+A project's `branch` is a regular expression matched against the pull
+request's base branch (the branch the PR merges into, not the PR's own
+branch). A project whose `branch` does not match is not impacted by that pull
+request: no plan on push, and `-p` / `-d` on a comment do not select it (the
+comment explains why). Downstream `depends_on` projects are filtered the same
+way. The same directory can be registered twice with different workspaces:
+
+```yaml
+projects:
+  - name: app-staging
+    dir: infra/app
+    workspace: staging
+    branch: ^develop$
+  - name: app-prod
+    dir: infra/app
+    workspace: prod
+    branch: ^(main|release/.*)$
+```
+
+The match is unanchored, so write `^main$` rather than `main` when `main`
+must not also match `maintenance`. Manual and drift runs have no pull
+request and ignore the filter.
 
 ### Local modules
 
