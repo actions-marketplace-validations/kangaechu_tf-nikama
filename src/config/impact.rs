@@ -76,6 +76,7 @@ pub fn impacted_projects(config: &Config, changed_files: &[String]) -> Vec<Proje
             format!("{}/**/*", dir)
         }];
         includes.extend(p.include_patterns.iter().map(|pat| join_pattern(&dir, pat)));
+        includes.extend(p.module_dirs.iter().map(|m| format!("{}/**/*", m)));
         let excludes: Vec<String> = p
             .exclude_patterns
             .iter()

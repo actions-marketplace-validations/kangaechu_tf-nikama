@@ -150,7 +150,8 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    ready for review.
 2. Impacted projects are computed from the PR's changed files
    (`dir/**`, `include_patterns`, `exclude_patterns`, plus downstream
-   `depends_on` projects in `hard` mode).
+   `depends_on` projects in `hard` mode). With `autoplan_modules: true`,
+   local modules the project uses count as part of it (see "Local modules").
 3. One run comment is posted immediately with every project as *pending*, and
    the commit status is set to *pending*.
 4. PR locks are checked for all projects up front and taken in configuration
@@ -287,9 +288,30 @@ with a warning. Unknown keys and keys for unsupported features are errors.
 Top-level keys: `projects`, `workflows`, `generate_projects`,
 `dependency_configuration`, `traverse_to_nested_projects`, `auto_merge`,
 `auto_merge_strategy`, `pr_locks`, `allow_draft_prs`, `no_lock_label`,
-`wakeup_word`, `drift_include_patterns`, `drift_exclude_patterns`,
-`concurrency`, `comment`, `allowed_providers` (plus `git_timeout` and
-`telemetry`, accepted for compatibility).
+`wakeup_word`, `autoplan_modules`, `drift_include_patterns`,
+`drift_exclude_patterns`, `concurrency`, `comment`, `allowed_providers` (plus
+`git_timeout` and `telemetry`, accepted for compatibility).
+
+### Local modules
+
+A project that uses a module from elsewhere in the repository is not impacted
+when only that module changes, unless the directory is listed in
+`include_patterns` by hand. `autoplan_modules: true` does that automatically:
+the `*.tf` / `*.tofu` files of each project directory are scanned for
+`module` blocks whose `source` is a local path (`./...` or `../...`), the
+referenced directories are followed transitively, and a change anywhere under
+them impacts the project.
+
+```yaml
+autoplan_modules: true
+```
+
+Only string-literal sources are recognised; registry, git and HTTP sources,
+`*.tf.json` files and directories that do not exist in the checkout are
+ignored. The scan reads the checkout, so with `config-ref` it follows the
+pull request's own module references, which can only widen the set of
+impacted projects. `generate_projects` never turns a `modules` directory
+into a project, so the two work together.
 
 ### Wakeup word
 

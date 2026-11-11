@@ -4,6 +4,7 @@ mod convert;
 mod generate;
 mod graph;
 mod impact;
+mod modules;
 mod raw;
 mod remote;
 #[cfg(test)]
@@ -160,6 +161,9 @@ pub struct Project {
     pub aws_role_to_assume: Option<AwsRoleToAssume>,
     pub aws_cognito_oidc: Option<AwsCognitoOidc>,
     pub generated: bool,
+    /// Local module directories (repository-relative) this project uses,
+    /// filled when `autoplan_modules` is on. Changes there impact the project.
+    pub module_dirs: Vec<String>,
 }
 
 impl Project {
@@ -323,6 +327,9 @@ pub struct Config {
     /// Words a PR comment may start with to be treated as a command
     /// (case-insensitive). Never empty; the first one is used in messages.
     pub wakeup_words: Vec<String>,
+    /// `autoplan_modules`: changes to referenced local modules impact the
+    /// project (see `Project::module_dirs`).
+    pub autoplan_modules: bool,
     pub graph: DependencyGraph,
 }
 
