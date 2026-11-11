@@ -89,6 +89,7 @@ allowed_plan_args:
 auto_merge: false
 dependency_configuration:
   mode: hard
+  on_failure: skip_dependents  # skip_dependents | abort | continue
 
 concurrency:
   max_parallel: 4

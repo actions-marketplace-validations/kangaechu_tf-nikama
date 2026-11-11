@@ -85,6 +85,8 @@ comment:
 wakeup_word: [nikama, digger]  # word(s) a comment command starts with (default shown)
 autoplan_modules: false        # nikama-only: follow local `module` sources when computing impacted projects
 allowed_plan_args: []          # nikama-only: arguments a comment may pass after `--` (empty: refused)
+dependency_configuration:
+  on_failure: skip_dependents  # nikama-only: skip_dependents (default) | abort | continue after a failed apply
 ```
 
 スキーマの全体は [`examples/nikama.yml`](../examples/nikama.yml) を参照してください。

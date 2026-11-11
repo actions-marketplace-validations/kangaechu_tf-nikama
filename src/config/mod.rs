@@ -62,6 +62,19 @@ pub enum DependencyMode {
     Soft,
 }
 
+/// What happens to the remaining applies when a project fails
+/// (`dependency_configuration.on_failure`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnFailure {
+    /// Projects that depend (directly or transitively) on a failed project
+    /// are skipped; unrelated projects still run.
+    SkipDependents,
+    /// Every project in a later level is skipped once any project failed.
+    Abort,
+    /// Dependents run anyway.
+    Continue,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeStrategy {
     Squash,
@@ -349,6 +362,7 @@ pub struct Config {
     pub projects: Vec<Project>,
     pub workflows: BTreeMap<String, Workflow>,
     pub dependency_mode: DependencyMode,
+    pub on_failure: OnFailure,
     pub traverse_to_nested_projects: bool,
     pub auto_merge: bool,
     pub auto_merge_strategy: MergeStrategy,

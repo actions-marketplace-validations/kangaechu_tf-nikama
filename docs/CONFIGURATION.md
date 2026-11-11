@@ -67,6 +67,13 @@ compatibility).
    blind), otherwise a plan produced immediately before the apply, whose
    summary is shown in the comment. Stored plans record the PR head commit
    they were produced from; a plan from a different commit is refused.
+   When an apply fails, `dependency_configuration.on_failure` decides what
+   happens to the rest (default `skip_dependents`): projects that depend on
+   the failed one, directly or transitively, are reported as *skipped* with
+   the failed project named, while unrelated projects in later levels still
+   apply. `abort` skips every later level instead (applies already running
+   in the failing level finish), and `continue` applies dependents anyway.
+   Applies that already ran are never rolled back.
 7. The commit status is set to success / failure; `auto_merge` merges the PR
    when every apply succeeded (see "Auto-merge and branch protection" in
    README when the base branch is protected). A push that impacts no project

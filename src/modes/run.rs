@@ -1,7 +1,7 @@
 //! Shared job execution: parallel plans, level-ordered applies.
 
 use crate::aws_auth::populate_job_credentials;
-use crate::config::Config;
+use crate::config::{Config, OnFailure};
 use crate::engine::{plan_summary_table, ApplyResult, Command, Job, JobExecutor, PlanResult};
 use crate::lock::{LockOutcome, PrLocker};
 use crate::report::{DetailKind, ReportWriter, RowStatus};
@@ -389,8 +389,17 @@ pub async fn run_parallel(ctx: Arc<RunContext>, jobs: Vec<Job>) -> Vec<JobResult
     results
 }
 
-/// Run apply/destroy jobs level by level in dependency order. Projects whose
-/// dependencies failed are skipped.
+/// Run apply/destroy jobs level by level in dependency order. What happens
+/// after a failure is governed by `dependency_configuration.on_failure`:
+///
+/// - `skip_dependents` (default): projects depending, directly or
+///   transitively, on a failed project are skipped; unrelated projects in
+///   later levels still run.
+/// - `abort`: the level containing the failure finishes (jobs already
+///   started are not cancelled), then every later level is skipped.
+/// - `continue`: dependents run anyway; nothing is skipped.
+///
+/// Skipped projects are reported with `Outcome::Skipped` and the reason.
 pub async fn run_by_levels(
     ctx: Arc<RunContext>,
     jobs: Vec<Job>,
@@ -402,21 +411,36 @@ pub async fn run_by_levels(
         .into_iter()
         .map(|j| (j.project.name.clone(), j))
         .collect();
+    let on_failure = ctx.config.on_failure;
     let mut results = Vec::new();
-    let mut failed: std::collections::BTreeSet<String> = Default::default();
+    // Projects that failed or were skipped, in the order that happened.
+    // Skipped projects count as failed so that their own dependents are
+    // skipped too.
+    let mut failed: Vec<String> = Vec::new();
     for level in levels {
         let mut batch = Vec::new();
         for name in level {
             let Some(job) = by_name.remove(&name) else {
                 continue;
             };
-            let deps = ctx.config.graph.dependencies_of(&name);
-            if let Some(bad) = deps.iter().find(|d| failed.contains(*d)) {
-                let reason = format!("dependency {} failed", bad);
+            let skip_reason = match on_failure {
+                OnFailure::Continue => None,
+                OnFailure::Abort => failed
+                    .first()
+                    .map(|first| format!("run aborted because {} failed", first)),
+                OnFailure::SkipDependents => ctx
+                    .config
+                    .graph
+                    .dependencies_of(&name)
+                    .into_iter()
+                    .find(|d| failed.contains(d))
+                    .map(|bad| format!("dependency {} failed", bad)),
+            };
+            if let Some(reason) = skip_reason {
                 let n = name.clone();
                 let r = reason.clone();
                 ctx.update(move |rep| rep.row_mut(&n).status = RowStatus::Skipped(r));
-                failed.insert(name.clone());
+                failed.push(name.clone());
                 results.push(JobResult {
                     project: name,
                     command: job.command,
@@ -439,7 +463,7 @@ pub async fn run_by_levels(
         for h in handles {
             if let Ok(r) = h.await {
                 if !r.is_ok() {
-                    failed.insert(r.project.clone());
+                    failed.push(r.project.clone());
                 }
                 results.push(r);
             }

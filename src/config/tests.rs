@@ -38,6 +38,7 @@ fn defaults_are_applied() {
     assert!(!c.auto_merge);
     assert_eq!(c.auto_merge_strategy, MergeStrategy::Squash);
     assert_eq!(c.dependency_mode, DependencyMode::Hard);
+    assert_eq!(c.on_failure, OnFailure::SkipDependents);
     assert!(c.traverse_to_nested_projects);
     assert_eq!(c.concurrency.max_parallel, 4);
     assert_eq!(c.concurrency.apply_parallelism, 1);
@@ -238,11 +239,22 @@ fn top_level_enum_validation() {
         "projects: []\ndependency_configuration:\n  mode: medium\n"
     ))
     .contains("hard"));
+    assert!(err_msg(load(
+        "projects: []\ndependency_configuration:\n  on_failure: stop\n"
+    ))
+    .contains("skip_dependents"));
     assert!(err_msg(load("projects: []\nauto_merge_strategy: fast-forward\n")).contains("squash"));
     assert!(err_msg(load("projects: []\ncomment:\n  mode: many\n")).contains("single"));
     assert!(err_msg(load("projects: []\nconcurrency:\n  max_parallel: 0\n")).contains(">= 1"));
-    let c = load("projects: []\ndependency_configuration:\n  mode: soft\nauto_merge: true\nauto_merge_strategy: rebase\ncomment:\n  mode: latest\n  show_empty_plans: hide\n").unwrap();
+    let c = load("projects: []\ndependency_configuration:\n  mode: soft\n  on_failure: abort\nauto_merge: true\nauto_merge_strategy: rebase\ncomment:\n  mode: latest\n  show_empty_plans: hide\n").unwrap();
     assert_eq!(c.dependency_mode, DependencyMode::Soft);
+    assert_eq!(c.on_failure, OnFailure::Abort);
+    assert_eq!(
+        load("projects: []\ndependency_configuration:\n  on_failure: continue\n")
+            .unwrap()
+            .on_failure,
+        OnFailure::Continue
+    );
     assert_eq!(c.auto_merge_strategy, MergeStrategy::Rebase);
     assert_eq!(c.comment.mode, CommentMode::Latest);
     assert_eq!(c.comment.show_empty_plans, ShowEmptyPlans::Hide);
