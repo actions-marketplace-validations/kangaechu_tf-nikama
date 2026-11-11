@@ -21,7 +21,8 @@ pub struct RawConfig {
     pub traverse_to_nested_projects: Option<bool>,
     pub auto_merge: Option<bool>,
     pub auto_merge_strategy: Option<String>,
-    pub pr_locks: Option<bool>,
+    /// `true` / `on_plan`, `on_apply`, or `false` / `disabled`.
+    pub pr_locks: Option<BoolOrString>,
     pub allow_draft_prs: Option<bool>,
     pub no_lock_label: Option<String>,
     pub git_timeout: Option<i64>,
@@ -108,6 +109,14 @@ impl RawConfig {
 }
 
 /// A YAML value that is either one string or a list of strings.
+/// A key that accepts a boolean or a keyword (`pr_locks`).
+#[derive(Debug, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum BoolOrString {
+    Bool(bool),
+    Str(String),
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[serde(untagged)]
 pub enum OneOrMany {

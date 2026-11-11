@@ -162,6 +162,14 @@ Coming from Digger? See [`docs/MIGRATION.md`](docs/MIGRATION.md).
    and only projects this PR already holds still run. On close / merge and
    on a bare `digger unlock`, every lock the PR still holds is released, not
    only those of the currently impacted projects.
+   `pr_locks` decides when a lock is taken: `on_plan` (the default, also
+   `true`) locks on the first plan, so one pull request holds a project from
+   its first plan until it is closed or merged; `on_apply` lets every pull
+   request plan freely and locks only on `apply`, which then holds the
+   project until close / merge or `unlock` (later plans of the same PR keep
+   it); `disabled` (also `false`) never locks. With `on_apply`, add
+   `undiverged` to `apply_requirements` so a pull request cannot apply a
+   plan that lacks changes another pull request already applied and merged.
    A plan can skip locking altogether: `digger plan --no-lock` on a comment,
    or a pull request carrying the label named in `no_lock_label` (set it to
    the label your Renovate / Dependabot configuration adds). Such a plan runs

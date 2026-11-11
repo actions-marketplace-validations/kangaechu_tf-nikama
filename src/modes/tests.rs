@@ -3,7 +3,7 @@
 use super::pr_event::{
     acquire_locks, all_plans_empty, apply_gate, check_approved, check_blocked, check_undiverged,
     closed_pr_rejection, draft_pr_rejection, no_lock_reason, required_checks, set_noop_statuses,
-    summarize, sweep_locks, ApplyGate,
+    summarize, sweep_locks, ApplyGate, PlanLocking,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -759,7 +759,7 @@ async fn locks_all_free_are_all_taken() {
     let server = MockServer::start().await;
     let mem = Arc::new(MemLock::default());
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), PlanLocking::Take).await;
     assert!(!plan.failed);
     assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
     assert!(plan.rows.is_empty());
@@ -774,7 +774,7 @@ async fn locks_held_by_another_pr_block_new_acquisition() {
     mock_pr_state(&server, 2, "open").await;
     let mem = Arc::new(MemLock::holding(&[("o/r#b", 2)]));
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), PlanLocking::Take).await;
     assert!(plan.failed);
     assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
     let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
@@ -800,7 +800,7 @@ async fn locks_already_ours_still_run_when_others_are_blocked() {
         j.command = Command::Unlock;
         j
     });
-    let plan = acquire_locks(&locker, 1, jobs, false).await;
+    let plan = acquire_locks(&locker, 1, jobs, PlanLocking::Take).await;
     assert!(plan.failed);
     // `a` is held from an earlier run, the unlock job needs no lock.
     assert_eq!(names(&plan.runnable), vec!["a", "c"]);
@@ -856,7 +856,7 @@ async fn lost_race_releases_locks_taken_in_this_run() {
         tripped: Default::default(),
     });
     let locker = pr_locker(&server, race.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), false).await;
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), PlanLocking::Take).await;
     assert!(plan.failed);
     assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
     let rows: Vec<(&str, &RowStatus)> = plan.rows.iter().map(|(n, s, _)| (n.as_str(), s)).collect();
@@ -1243,7 +1243,13 @@ async fn no_lock_plan_takes_nothing_and_runs_despite_other_holders() {
     // a: held by this PR from an earlier run, b: held by PR 2, c: free.
     let mem = Arc::new(MemLock::holding(&[("o/r#a", 1), ("o/r#b", 2)]));
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), true).await;
+    let plan = acquire_locks(
+        &locker,
+        1,
+        abc_jobs(Command::Plan),
+        PlanLocking::SkipAndRelease,
+    )
+    .await;
     assert!(!plan.failed);
     assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
     assert!(plan.rows.is_empty());
@@ -1259,7 +1265,13 @@ async fn no_lock_does_not_apply_to_apply_jobs() {
     mock_pr_state(&server, 2, "open").await;
     let mem = Arc::new(MemLock::holding(&[("o/r#b", 2)]));
     let locker = pr_locker(&server, mem.clone());
-    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Apply), true).await;
+    let plan = acquire_locks(
+        &locker,
+        1,
+        abc_jobs(Command::Apply),
+        PlanLocking::SkipAndRelease,
+    )
+    .await;
     assert!(plan.failed);
     assert!(plan.runnable.is_empty(), "{:?}", names(&plan.runnable));
     assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
@@ -1446,4 +1458,56 @@ fn branch_filter_notes_explain_unmatched_selectors() {
     ));
     assert!(notes[1].starts_with("project 'production'"));
     assert!(branch_filter_notes(&config, &["prod".into()], "main").is_empty());
+}
+
+// `pr_locks: on_apply`: plans never lock and leave existing locks alone.
+
+#[tokio::test]
+async fn on_apply_plan_takes_nothing_and_keeps_our_lock() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    // a: held by this PR from an earlier apply, b: held by PR 2, c: free.
+    let mem = Arc::new(MemLock::holding(&[("o/r#a", 1), ("o/r#b", 2)]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), PlanLocking::Skip).await;
+    assert!(!plan.failed);
+    assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
+    assert!(plan.rows.is_empty());
+    assert!(plan.released.is_empty());
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
+    assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), None);
+}
+
+#[test]
+fn no_lock_escapes_are_moot_with_on_apply() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str(
+        "projects:\n  - name: a\n    dir: a\npr_locks: on_apply\nno_lock_label: no-lock\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let mut pr_info = pr(false, "open", Some(true), Some("clean"));
+    pr_info.labels = vec!["no-lock".into()];
+    assert_eq!(
+        no_lock_reason(
+            &trigger_with(abc_jobs(Command::Plan), true),
+            &config,
+            &pr_info
+        ),
+        None
+    );
+}
+
+#[tokio::test]
+async fn on_apply_apply_still_locks() {
+    let server = MockServer::start().await;
+    mock_pr_state(&server, 2, "open").await;
+    let mem = Arc::new(MemLock::holding(&[]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Apply), PlanLocking::Skip).await;
+    assert!(!plan.failed);
+    assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), Some(1));
 }
