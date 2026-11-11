@@ -3,7 +3,7 @@
 use super::exit;
 use super::run::{run_by_levels, run_parallel, JobResult, Outcome, RunContext};
 use crate::cli::Env;
-use crate::config::{CommentMode, Config};
+use crate::config::{CommentMode, Config, LockMode};
 use crate::engine::{Command, Job};
 use crate::github::comment_cmd::help_text;
 use crate::github::events::{
@@ -143,7 +143,7 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         .await;
 
     // Locking (two-phase).
-    let locker = match crate::lock::from_env(config.pr_locks).await {
+    let locker = match crate::lock::from_env(config.pr_locks.enabled()).await {
         Ok(backend) => Arc::new(PrLocker::new(backend, github.clone())),
         Err(e) => {
             tracing::error!(error = %e, "could not initialise lock provider");
@@ -164,13 +164,12 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     };
     let keep_locks: Vec<String> = trigger.jobs.iter().map(|j| j.lock_id()).collect();
     let no_lock_reason = no_lock_reason(&trigger, &config, &pr);
-    let plan = acquire_locks(
-        &locker,
-        trigger.pr_number,
-        trigger.jobs,
-        no_lock_reason.is_some(),
-    )
-    .await;
+    let plan_locking = match (config.pr_locks, &no_lock_reason) {
+        (LockMode::OnApply, _) => PlanLocking::Skip,
+        (_, Some(_)) => PlanLocking::SkipAndRelease,
+        (_, None) => PlanLocking::Take,
+    };
+    let plan = acquire_locks(&locker, trigger.pr_number, trigger.jobs, plan_locking).await;
     let lock_failed = plan.failed;
     if let Some(reason) = no_lock_reason {
         let mut notes = vec![format!(
@@ -603,6 +602,21 @@ pub(super) struct LockPlan {
     pub released: Vec<String>,
 }
 
+/// How `plan` jobs treat project locks in [`acquire_locks`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PlanLocking {
+    /// Take the lock like apply does (`pr_locks: on_plan`).
+    Take,
+    /// Take nothing and run whoever holds the project; a lock this PR
+    /// already holds for a planned project is released, so a PR that is
+    /// only being planned blocks nobody (`plan --no-lock`, `no_lock_label`).
+    SkipAndRelease,
+    /// Take nothing and leave existing locks alone: locks belong to apply,
+    /// and one taken by an earlier apply of this PR must survive later
+    /// plans (`pr_locks: on_apply`).
+    Skip,
+}
+
 fn lockable(job: &Job) -> bool {
     matches!(
         job.command,
@@ -619,15 +633,13 @@ fn lockable(job: &Job) -> bool {
 /// again; only jobs whose lock this PR already held from an earlier run keep
 /// running. Jobs that need no lock (`lock` / `unlock`) always run.
 ///
-/// With `no_lock_plan`, `plan` jobs need no lock either: they run whoever
-/// holds the project, and a lock this PR already holds for a planned project
-/// is released, so a PR that is only being planned blocks nobody. Apply and
-/// destroy jobs always take their locks.
+/// `plan_locking` says what `plan` jobs do about locks (see [`PlanLocking`]).
+/// Apply and destroy jobs always take their locks.
 pub(super) async fn acquire_locks(
     locker: &PrLocker,
     pr: u64,
     jobs: Vec<Job>,
-    no_lock_plan: bool,
+    plan_locking: PlanLocking,
 ) -> LockPlan {
     /// What phase 1 learned about one job.
     enum Pre {
@@ -655,7 +667,11 @@ pub(super) async fn acquire_locks(
             pre.push(Pre::NoLock);
             continue;
         }
-        if no_lock_plan && job.command == Command::Plan {
+        if job.command == Command::Plan && plan_locking == PlanLocking::Skip {
+            pre.push(Pre::NoLock);
+            continue;
+        }
+        if job.command == Command::Plan && plan_locking == PlanLocking::SkipAndRelease {
             // Give back a lock from an earlier (locking) run of this PR; a
             // failure here only means the lock stays, the plan still runs.
             let resource = job.lock_id();
@@ -849,7 +865,7 @@ async fn sweep_locks_from_env(
     namespace: &str,
     keep: &[String],
 ) -> anyhow::Result<Vec<String>> {
-    let backend = crate::lock::from_env(config.pr_locks).await?;
+    let backend = crate::lock::from_env(config.pr_locks.enabled()).await?;
     let locker = PrLocker::new(backend, github.clone());
     let storage = crate::storage::from_env().await?;
     sweep_locks(&locker, storage.as_ref(), pr, namespace, keep).await
@@ -893,13 +909,16 @@ pub(super) fn closed_pr_rejection(pr: &crate::github::PrInfo, command: Command) 
 
 /// Why this run plans without locks, if it does: the comment said
 /// `--no-lock`, or the PR carries `no_lock_label`. Only runs that plan
-/// something qualify.
+/// something qualify. With `pr_locks: on_apply` plans never lock, so neither
+/// escape applies and nothing is reported.
 pub(super) fn no_lock_reason(
     trigger: &Trigger,
     config: &Config,
     pr: &crate::github::PrInfo,
 ) -> Option<String> {
-    if !trigger.jobs.iter().any(|j| j.command == Command::Plan) {
+    if config.pr_locks == LockMode::OnApply
+        || !trigger.jobs.iter().any(|j| j.command == Command::Plan)
+    {
         return None;
     }
     if trigger.no_lock_flag {

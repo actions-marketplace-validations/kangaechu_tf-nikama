@@ -79,6 +79,34 @@ impl MergeStrategy {
     }
 }
 
+/// When PR locks are taken (`pr_locks`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// `true` / `on_plan` (default): a plan takes the project lock, so the
+    /// first pull request to plan a project holds it until close / merge.
+    OnPlan,
+    /// `on_apply`: plans never lock; apply (and destroy) take the lock and
+    /// keep it until close / merge or `unlock`.
+    OnApply,
+    /// `false` / `disabled`: no locks at all.
+    Disabled,
+}
+
+impl LockMode {
+    /// Whether a lock backend is needed at all.
+    pub fn enabled(self) -> bool {
+        self != LockMode::Disabled
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LockMode::OnPlan => "on_plan",
+            LockMode::OnApply => "on_apply",
+            LockMode::Disabled => "disabled",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommentMode {
     Single,
@@ -324,7 +352,7 @@ pub struct Config {
     pub traverse_to_nested_projects: bool,
     pub auto_merge: bool,
     pub auto_merge_strategy: MergeStrategy,
-    pub pr_locks: bool,
+    pub pr_locks: LockMode,
     pub allow_draft_prs: bool,
     /// Pull requests carrying this label are planned without taking project
     /// locks (`None`: no label does that).

@@ -264,6 +264,7 @@ These change what you see, not what you configure.
 | `approved` requirement | any user's review counts | only reviews from users with write access count, as with branch protection |
 | `ready_for_review` | ignored | runs `on_pull_request_pushed` |
 | Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see README "How a run works") |
+| Lock on apply only | not available | `pr_locks: on_apply`; `true` / `false` keep their meaning (see README "How a run works") |
 | Changes to a local module | project not impacted unless `include_patterns` lists the module | `autoplan_modules: true` follows `module` sources (see README "Local modules") |
 | Project `branch` | accepted, not used for project selection | regular expression on the PR's base branch; non-matching projects are not impacted (see README "Base branch filter") |
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |

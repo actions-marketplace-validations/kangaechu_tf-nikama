@@ -33,7 +33,7 @@ fn defaults_are_applied() {
         wf.configuration.on_pull_request_closed,
         vec!["digger unlock"]
     );
-    assert!(c.pr_locks);
+    assert_eq!(c.pr_locks, LockMode::OnPlan);
     assert_eq!(c.no_lock_label, None);
     assert!(!c.auto_merge);
     assert_eq!(c.auto_merge_strategy, MergeStrategy::Squash);
@@ -744,6 +744,30 @@ fn branch_must_be_a_valid_regex() {
     ));
     assert!(
         msg.contains("project 'a': branch is not a valid regular expression"),
+        "{msg}"
+    );
+}
+
+#[test]
+fn pr_locks_accepts_booleans_and_modes() {
+    for (value, expected) in [
+        ("true", LockMode::OnPlan),
+        ("on_plan", LockMode::OnPlan),
+        ("ON_APPLY", LockMode::OnApply),
+        ("on_apply", LockMode::OnApply),
+        ("false", LockMode::Disabled),
+        ("disabled", LockMode::Disabled),
+    ] {
+        let c = load(&format!("projects: []\npr_locks: {value}\n")).unwrap();
+        assert_eq!(c.pr_locks, expected, "{value}");
+    }
+    assert!(LockMode::OnApply.enabled());
+    assert!(!LockMode::Disabled.enabled());
+    let msg = err_msg(load("projects: []\npr_locks: sometimes\n"));
+    assert!(
+        msg.contains(
+            "pr_locks must be true, false, on_plan, on_apply or disabled, got 'sometimes'"
+        ),
         "{msg}"
     );
 }

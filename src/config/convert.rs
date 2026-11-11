@@ -80,6 +80,22 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
 
     let wakeup_words = convert_wakeup_words(raw.wakeup_word.map(OneOrMany::into_vec))?;
 
+    let pr_locks = match raw.pr_locks {
+        None | Some(BoolOrString::Bool(true)) => LockMode::OnPlan,
+        Some(BoolOrString::Bool(false)) => LockMode::Disabled,
+        Some(BoolOrString::Str(s)) => match s.trim().to_ascii_lowercase().as_str() {
+            "on_plan" => LockMode::OnPlan,
+            "on_apply" => LockMode::OnApply,
+            "disabled" => LockMode::Disabled,
+            other => {
+                return Err(ConfigError::Validation(format!(
+                    "pr_locks must be true, false, on_plan, on_apply or disabled, got '{}'",
+                    other
+                )))
+            }
+        },
+    };
+
     // Workflows.
     let mut workflows: BTreeMap<String, Workflow> = BTreeMap::new();
     for (name, wf) in raw.workflows {
@@ -136,7 +152,7 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         traverse_to_nested_projects,
         auto_merge: raw.auto_merge.unwrap_or(false),
         auto_merge_strategy,
-        pr_locks: raw.pr_locks.unwrap_or(true),
+        pr_locks,
         allow_draft_prs: raw.allow_draft_prs.unwrap_or(false),
         no_lock_label: raw
             .no_lock_label
