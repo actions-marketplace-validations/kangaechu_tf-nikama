@@ -30,10 +30,17 @@ fn runner_argument_builders() {
         vec!["init", "-upgrade", "-input=false", "-no-color"]
     );
     assert_eq!(
-        plan_args(&["-var-file=a.tfvars".into()], Path::new("/tmp/p.tfplan")),
+        plan_args(
+            &["-var-file=a.tfvars".into()],
+            &["-target=module.x".into(), "-var=p=$HOME".into()],
+            Path::new("/tmp/p.tfplan")
+        ),
+        // Request arguments follow the workflow's and are not expanded.
         vec![
             "plan",
             "-var-file=a.tfvars",
+            "-target=module.x",
+            "-var=p=$HOME",
             "-input=false",
             "-no-color",
             "-detailed-exitcode",

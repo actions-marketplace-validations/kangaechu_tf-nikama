@@ -771,3 +771,51 @@ fn pr_locks_accepts_booleans_and_modes() {
         "{msg}"
     );
 }
+
+#[test]
+fn allowed_plan_args_are_validated_and_matched() {
+    let c = load("projects: []\n").unwrap();
+    assert!(c.allowed_plan_args.is_empty());
+    let c = load(
+        "projects: []\nallowed_plan_args: [' -target=* ', '-replace=*', '-refresh=false', '-target=*']\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.allowed_plan_args,
+        vec!["-target=*", "-replace=*", "-refresh=false"]
+    );
+    assert_eq!(c.check_extra_args(&[]), Ok(()));
+    assert_eq!(
+        c.check_extra_args(&["-target=module.a.aws_s3_bucket.b[\"x/y\"]".into()]),
+        Ok(())
+    );
+    assert_eq!(
+        c.check_extra_args(&["-refresh=false".into(), "-replace=aws_instance.web".into()]),
+        Ok(())
+    );
+    assert_eq!(
+        c.check_extra_args(&["-refresh=true".into()]),
+        Err("-refresh=true")
+    );
+    // Values must be in the `-flag=value` form: a bare value is its own token.
+    assert_eq!(
+        c.check_extra_args(&["-target".into(), "module.a".into()]),
+        Err("-target")
+    );
+    assert_eq!(
+        c.check_extra_args(&["-target=x".into(), "-var=a=b".into()]),
+        Err("-var=a=b")
+    );
+
+    for (yaml, msg) in [
+        ("allowed_plan_args: ['']", "must not be empty"),
+        ("allowed_plan_args: ['target=*']", "must start with '-'"),
+        (
+            "allowed_plan_args: ['-target=[']",
+            "allowed_plan_args entry '-target=['",
+        ),
+    ] {
+        let m = err_msg(load(&format!("projects: []\n{yaml}\n")));
+        assert!(m.contains(msg), "{m}");
+    }
+}

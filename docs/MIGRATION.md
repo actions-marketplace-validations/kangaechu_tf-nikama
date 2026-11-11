@@ -81,6 +81,8 @@ comment:
   show_empty_plans: table
 
 wakeup_word: [nikama, digger]  # word(s) a comment command starts with (default shown)
+autoplan_modules: false        # nikama-only: follow local `module` sources when computing impacted projects
+allowed_plan_args: []          # nikama-only: arguments a comment may pass after `--` (empty: refused)
 ```
 
 See [`examples/nikama.yml`](../examples/nikama.yml) for the full schema.
@@ -265,6 +267,7 @@ These change what you see, not what you configure.
 | `ready_for_review` | ignored | runs `on_pull_request_pushed` |
 | Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see README "How a run works") |
 | Lock on apply only | not available | `pr_locks: on_apply`; `true` / `false` keep their meaning (see README "How a run works") |
+| Terraform arguments on a comment | not available | `nikama plan -- -target=...`, limited by `allowed_plan_args` (see README "Extra arguments on comments") |
 | Changes to a local module | project not impacted unless `include_patterns` lists the module | `autoplan_modules: true` follows `module` sources (see README "Local modules") |
 | Project `branch` | accepted, not used for project selection | regular expression on the PR's base branch; non-matching projects are not impacted (see README "Base branch filter") |
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |

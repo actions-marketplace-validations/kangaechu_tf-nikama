@@ -1,6 +1,8 @@
 //! S3 plan storage.
 
-use super::{PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY};
+use super::{
+    decode_args, PlanMeta, PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY, PLAN_ARGS_METADATA_KEY,
+};
 use async_trait::async_trait;
 use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::primitives::ByteStream;
@@ -32,15 +34,15 @@ impl S3PlanStorage {
 
 #[async_trait]
 impl PlanStorage for S3PlanStorage {
-    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()> {
+    async fn store(&self, key: &str, bytes: &[u8], meta: &PlanMeta) -> anyhow::Result<()> {
         let mut req = self
             .client
             .put_object()
             .bucket(&self.bucket)
             .key(key)
             .body(ByteStream::from(bytes.to_vec()));
-        if let Some(sha) = head_sha {
-            req = req.metadata(HEAD_SHA_METADATA_KEY, sha);
+        for (k, v) in meta.to_metadata() {
+            req = req.metadata(k, v);
         }
         match &self.encryption {
             Some(Encryption::Aes256) => {
@@ -74,6 +76,11 @@ impl PlanStorage for S3PlanStorage {
                     .and_then(|m| m.get(HEAD_SHA_METADATA_KEY))
                     .filter(|s| !s.is_empty())
                     .cloned();
+                let extra_args = decode_args(
+                    out.metadata()
+                        .and_then(|m| m.get(PLAN_ARGS_METADATA_KEY))
+                        .map(String::as_str),
+                );
                 let data = out
                     .body
                     .collect()
@@ -82,6 +89,7 @@ impl PlanStorage for S3PlanStorage {
                 Ok(Some(StoredPlan {
                     bytes: data.into_bytes().to_vec(),
                     head_sha,
+                    extra_args,
                 }))
             }
             Err(SdkError::ServiceError(e)) if e.err().is_no_such_key() => Ok(None),

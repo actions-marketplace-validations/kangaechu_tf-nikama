@@ -44,6 +44,10 @@ pub struct RawConfig {
     /// `./` or `../` source, followed transitively) as part of the project
     /// when computing impacted projects.
     pub autoplan_modules: Option<bool>,
+    /// Patterns for arguments a PR comment may pass to `terraform plan`
+    /// after `--`. Empty (default): the feature is off.
+    #[serde(default)]
+    pub allowed_plan_args: Vec<String>,
 
     // ---- unsupported keys (backend-only or unused in Digger) ----
     pub respect_layers: Option<Value>,

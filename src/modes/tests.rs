@@ -10,7 +10,7 @@ use crate::config::load_from_str;
 use crate::engine::{Command, Job, PlanResult, PlanSummary};
 use crate::github::client::{CheckContext, CheckKind, CompareInfo, MergeRequirements, ReviewInfo};
 use crate::github::PrInfo;
-use crate::storage::{NoopPlanStorage, PlanStorage, StoredPlan};
+use crate::storage::{NoopPlanStorage, PlanMeta, PlanStorage, StoredPlan};
 use std::sync::Arc;
 
 fn pr(merged: bool, state: &str, mergeable: Option<bool>, mergeable_state: Option<&str>) -> PrInfo {
@@ -456,6 +456,7 @@ impl MemoryStorage {
             StoredPlan {
                 bytes: b"not-a-real-plan".to_vec(),
                 head_sha: head_sha.map(|h| h.to_string()),
+                extra_args: vec![],
             },
         );
         s
@@ -464,12 +465,13 @@ impl MemoryStorage {
 
 #[async_trait::async_trait]
 impl PlanStorage for MemoryStorage {
-    async fn store(&self, key: &str, bytes: &[u8], head_sha: Option<&str>) -> anyhow::Result<()> {
+    async fn store(&self, key: &str, bytes: &[u8], meta: &PlanMeta) -> anyhow::Result<()> {
         self.plans.lock().unwrap().insert(
             key.to_string(),
             StoredPlan {
                 bytes: bytes.to_vec(),
-                head_sha: head_sha.map(|h| h.to_string()),
+                head_sha: meta.head_sha.clone(),
+                extra_args: meta.extra_args.clone(),
             },
         );
         Ok(())
@@ -1289,6 +1291,7 @@ fn trigger_with(jobs: Vec<Job>, no_lock_flag: bool) -> super::pr_event::Trigger 
         impacted: 3,
         expects_plan_or_apply: true,
         no_lock_flag,
+        extra_args: vec![],
     }
 }
 
@@ -1510,4 +1513,124 @@ async fn on_apply_apply_still_locks() {
     assert_eq!(names(&plan.runnable), vec!["a", "b", "c"]);
     assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
     assert_eq!(mem.holder("o/r#c").await.unwrap(), Some(1));
+}
+
+#[test]
+fn extra_args_rejection_cases() {
+    use super::pr_event::extra_args_rejection;
+    let tmp = tempfile::tempdir().unwrap();
+    let off = load_from_str("projects: []\n", tmp.path()).unwrap();
+    let on = load_from_str(
+        "projects: []\nallowed_plan_args: ['-target=*', '-refresh=false']\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let target = vec!["-target=module.a".to_string()];
+    assert_eq!(extra_args_rejection(&off, Command::Plan, &[], false), None);
+    assert!(extra_args_rejection(&off, Command::Plan, &target, false)
+        .unwrap()
+        .contains("not enabled in this repository"));
+    assert_eq!(
+        extra_args_rejection(&on, Command::Plan, &target, false),
+        None
+    );
+    assert_eq!(
+        extra_args_rejection(&on, Command::Plan, &target, true),
+        None
+    );
+    // Apply without plan storage plans right before applying, with the args.
+    assert_eq!(
+        extra_args_rejection(&on, Command::Apply, &target, false),
+        None
+    );
+    let msg = extra_args_rejection(&on, Command::Apply, &target, true).unwrap();
+    assert!(msg.contains("applies the stored plan as it is"), "{msg}");
+    assert!(msg.contains("`nikama plan`"), "{msg}");
+    let msg = extra_args_rejection(
+        &on,
+        Command::Plan,
+        &["-target=x".into(), "-lock=false".into()],
+        false,
+    )
+    .unwrap();
+    assert!(msg.contains("argument `-lock=false` is not allowed by `allowed_plan_args` (`-target=*`, `-refresh=false`)"), "{msg}");
+}
+
+#[tokio::test]
+async fn plan_comment_with_extra_args_sets_them_on_every_job() {
+    use super::pr_event::build_trigger;
+    use crate::github::GithubClient;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str(
+        "projects:\n  - name: a\n    dir: a\n  - name: b\n    dir: b\nallowed_plan_args: ['-target=*']\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let server = MockServer::start().await;
+    mock_role(&server, "alice", "write").await;
+    mock_pr_state(&server, 5, "open").await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/5/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!([{"filename": "a/main.tf"}, {"filename": "b/main.tf"}]),
+        ))
+        .mount(&server)
+        .await;
+    let posted = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let p2 = posted.clone();
+    Mock::given(method("POST"))
+        .and(path("/repos/o/r/issues/5/comments"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body: serde_json::Value = req.body_json().unwrap();
+            p2.lock()
+                .unwrap()
+                .push(body["body"].as_str().unwrap().to_string());
+            ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": 1}))
+        })
+        .mount(&server)
+        .await;
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+
+    let trigger = build_trigger(
+        &config,
+        &comment_context("alice", "digger plan -p a -- -target=module.x"),
+        &github,
+    )
+    .await
+    .unwrap()
+    .expect("trigger");
+    assert_eq!(trigger.extra_args, vec!["-target=module.x"]);
+    assert_eq!(trigger.jobs.len(), 1);
+    assert_eq!(trigger.jobs[0].extra_args, vec!["-target=module.x"]);
+    assert!(trigger
+        .notes
+        .iter()
+        .any(|n| n.contains("`plan` runs with extra arguments `-target=module.x`")));
+
+    // A disallowed argument is refused with a comment and nothing runs.
+    let err = match build_trigger(
+        &config,
+        &comment_context("alice", "digger plan -- -lock=false"),
+        &github,
+    )
+    .await
+    {
+        Err(code) => code,
+        Ok(_) => panic!("expected a refusal"),
+    };
+    assert_eq!(err, crate::modes::exit::COMMAND);
+    let bodies = posted.lock().unwrap().clone();
+    assert!(
+        bodies
+            .iter()
+            .any(|b| b.contains("`-lock=false` is not allowed")),
+        "{bodies:?}"
+    );
+
+    let trigger = build_trigger(&config, &comment_context("alice", "digger plan"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert!(trigger.extra_args.is_empty());
+    assert!(trigger.jobs.iter().all(|j| j.extra_args.is_empty()));
 }
