@@ -272,7 +272,7 @@ rather not grant `CreateTable`, create the table yourself: partition key `PK`
 (string), sort key `SK` (string), on-demand capacity.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -287,7 +287,7 @@ take the same project. The role needs `s3:PutObject`, `s3:GetObject`,
 plan bucket.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           lock-provider: s3
           aws-lock-bucket: my-lock-bucket
@@ -307,7 +307,7 @@ compatible with Digger's `gcp` providers.
         with:
           workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
           service_account: nikama@my-project.iam.gserviceaccount.com
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           lock-provider: gcp
           google-lock-bucket: my-lock-bucket
@@ -362,7 +362,7 @@ put on the allow list:
           private-key: ${{ secrets.NIKAMA_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
         # ...
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           # ...
@@ -412,7 +412,7 @@ is the pull request's own version. Two inputs tighten that:
   step, from whichever source it was read.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           config-ref: default
           allow-run-steps: "false"
@@ -426,7 +426,7 @@ runs code of its choosing with the job's credentials. `allowed-providers`
 limits what can be installed:
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.3.0
+      - uses: kangaechu/tf-nikama@v0.4.0
         with:
           allowed-providers: "hashicorp/aws, hashicorp/random, app.terraform.io/myorg/*"
 ```
