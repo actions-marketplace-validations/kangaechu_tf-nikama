@@ -173,6 +173,9 @@ What changed and why:
 - **Fewer permissions.** `actions: write` and `issues: write` are not needed
   for PR runs. Add `issues: write` only for drift detection with
   `drift-github-issues: true`, and `contents: write` only for `auto_merge`.
+  If the base branch restricts who can push, `GITHUB_TOKEN` cannot merge at
+  all; see "Auto-merge and branch protection" in the README for the GitHub
+  App setup.
 - **Plugin cache.** `cache-dependencies: true` set `TF_PLUGIN_CACHE_DIR` and
   wired up `actions/cache`. tf-nikama does not do this. If you want a provider
   cache, set `TF_PLUGIN_CACHE_DIR` and add `actions/cache` yourself; when the
