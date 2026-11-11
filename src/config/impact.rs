@@ -65,10 +65,19 @@ pub fn matches_patterns(file: &str, includes: &[String], excludes: &[String]) ->
 }
 
 /// Projects impacted by `changed_files`, in configuration order. Honours
-/// `dependency_configuration.mode`.
-pub fn impacted_projects(config: &Config, changed_files: &[String]) -> Vec<Project> {
+/// `dependency_configuration.mode`. Projects whose `branch` does not match
+/// `base_branch` (the pull request's base branch) are left out, including
+/// as downstream dependents; `None` applies no branch filter.
+pub fn impacted_projects(
+    config: &Config,
+    changed_files: &[String],
+    base_branch: Option<&str>,
+) -> Vec<Project> {
     let mut impacted: Vec<Project> = Vec::new();
     for p in &config.projects {
+        if !p.matches_base_branch(base_branch) {
+            continue;
+        }
         let dir = normalize_path(&p.dir);
         let mut includes: Vec<String> = vec![if dir.is_empty() {
             "**/*".to_string()
@@ -93,7 +102,9 @@ pub fn impacted_projects(config: &Config, changed_files: &[String]) -> Vec<Proje
         let names: Vec<String> = impacted.iter().map(|p| p.name.clone()).collect();
         for d in config.graph.descendants(&names) {
             if let Some(p) = config.project(&d) {
-                impacted.push(p.clone());
+                if p.matches_base_branch(base_branch) {
+                    impacted.push(p.clone());
+                }
             }
         }
         // Keep configuration order.

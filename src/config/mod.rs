@@ -153,7 +153,9 @@ pub struct Project {
     pub layer: u32,
     pub alias: Option<String>,
     pub block_name: Option<String>,
-    pub branch: Option<String>,
+    /// Only pull requests whose base branch matches this regular expression
+    /// impact the project (`None`: every base branch).
+    pub branch: Option<regex::Regex>,
     pub apply_requirements: Vec<String>,
     pub drift_detection: bool,
     pub drift_include_patterns: Vec<String>,
@@ -169,6 +171,15 @@ pub struct Project {
 impl Project {
     pub fn display_name(&self) -> &str {
         self.alias.as_deref().unwrap_or(&self.name)
+    }
+
+    /// `true` when the project applies to a pull request into `base_branch`.
+    /// `None` (no pull request: manual and drift runs) matches every project.
+    pub fn matches_base_branch(&self, base_branch: Option<&str>) -> bool {
+        match (&self.branch, base_branch) {
+            (Some(re), Some(base)) => re.is_match(base),
+            _ => true,
+        }
     }
 }
 

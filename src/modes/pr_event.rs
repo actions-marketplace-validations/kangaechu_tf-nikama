@@ -420,7 +420,11 @@ pub(super) async fn build_trigger(
                 tracing::error!(error = %e, "could not list changed files");
                 exit::EVENT
             })?;
-            let impacted = crate::config::impacted_projects(config, &files);
+            let impacted = crate::config::impacted_projects(
+                config,
+                &files,
+                Some(&event.pull_request.base.git_ref),
+            );
             log_impacted(&impacted);
             let jobs = jobs_for_pull_request(&event, config, &impacted, &selector);
             let release_all_locks =
@@ -533,7 +537,7 @@ pub(super) async fn build_trigger(
                 tracing::error!(error = %e, "could not list changed files");
                 exit::EVENT
             })?;
-            let impacted = crate::config::impacted_projects(config, &files);
+            let impacted = crate::config::impacted_projects(config, &files, Some(&pr.base_ref));
             log_impacted(&impacted);
             let (selected, unmatched) = select_projects(&impacted, &cmd.projects, &cmd.dirs);
             let mut notes = Vec::new();
@@ -542,6 +546,7 @@ pub(super) async fn build_trigger(
                     "selector(s) matched no impacted project: {}",
                     unmatched.join(", ")
                 ));
+                notes.extend(branch_filter_notes(config, &cmd.projects, &pr.base_ref));
             }
             if impacted.is_empty() {
                 notes.push("no projects are impacted by this pull request".into());
@@ -1106,6 +1111,33 @@ pub(super) fn check_approved(
     } else {
         Err("pull request has no approving review".into())
     }
+}
+
+/// Explain `-p` selectors that name a project excluded by its `branch`
+/// filter for a pull request into `base_ref`.
+pub(super) fn branch_filter_notes(
+    config: &Config,
+    selectors: &[String],
+    base_ref: &str,
+) -> Vec<String> {
+    selectors
+        .iter()
+        .filter_map(|name| {
+            let p = config
+                .projects
+                .iter()
+                .find(|p| &p.name == name || p.alias.as_deref() == Some(name.as_str()))?;
+            let re = p.branch.as_ref()?;
+            (!re.is_match(base_ref)).then(|| {
+                format!(
+                    "project '{}' only runs for pull requests into branches matching `{}`, not `{}`",
+                    name,
+                    re.as_str(),
+                    base_ref
+                )
+            })
+        })
+        .collect()
 }
 
 /// `undiverged` requirement: the PR head must not be behind its base branch.

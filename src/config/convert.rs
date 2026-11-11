@@ -277,7 +277,18 @@ fn convert_project(p: RawProject) -> Result<Project, ConfigError> {
         layer: p.layer.unwrap_or(0),
         alias: p.alias.filter(|s| !s.is_empty()),
         block_name: p.block_name.filter(|s| !s.is_empty()),
-        branch: p.branch.filter(|s| !s.is_empty()),
+        branch: p
+            .branch
+            .filter(|s| !s.trim().is_empty())
+            .map(|s| {
+                regex::Regex::new(&s).map_err(|e| {
+                    ConfigError::Validation(format!(
+                        "project '{}': branch is not a valid regular expression: {}",
+                        p.name, e
+                    ))
+                })
+            })
+            .transpose()?,
         apply_requirements,
         drift_detection: p.drift_detection.unwrap_or(true),
         drift_include_patterns: p.drift_include_patterns,

@@ -15,6 +15,9 @@ projects:
     workspace: staging
     depends_on: [network]
     workflow: with_vars
+    # Regular expression matched against the pull request's base branch;
+    # the project is impacted only by PRs into a matching branch.
+    branch: ^develop$
     # Checks run before `digger apply` (default: [mergeable]). Each value is
     # enforced independently:
     #   mergeable  - GitHub reports the PR as mergeable (no conflicts, required

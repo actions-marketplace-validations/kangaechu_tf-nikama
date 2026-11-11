@@ -1373,3 +1373,77 @@ async fn plan_comment_with_no_lock_sets_the_flag() {
         .expect("trigger");
     assert!(!trigger.no_lock_flag);
 }
+
+#[tokio::test]
+async fn push_skips_projects_whose_branch_does_not_match_the_base() {
+    use super::pr_event::build_trigger;
+    use crate::github::{GithubClient, GithubContext};
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/repos/o/r/pulls/7/files"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"filename": "infra/app/main.tf"}
+        ])))
+        .mount(&server)
+        .await;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str(
+        "projects:\n  - name: staging\n    dir: infra/app\n    workspace: staging\n    branch: ^develop$\n  - name: prod\n    dir: infra/app\n    workspace: prod\n    branch: ^main$\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let github = GithubClient::new("tok", "o", "r", Some(&server.uri()));
+    let ctx = |base: &str| {
+        GithubContext::parse(&format!(
+            r#"{{"event_name":"pull_request","actor":"me","repository":"o/r","run_id":"1","run_attempt":"1",
+                "event":{{"action":"synchronize","pull_request":{{"number":7,"draft":false,"merged":false,
+                "head":{{"ref":"feat","sha":"abc"}},"base":{{"ref":"{}","sha":"def"}}}},
+                "repository":{{"default_branch":"main","full_name":"o/r"}},"sender":{{"login":"me"}}}}}}"#,
+            base
+        ))
+        .unwrap()
+    };
+    let t = build_trigger(&config, &ctx("develop"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert_eq!(t.impacted, 1);
+    assert_eq!(t.jobs[0].project.name, "staging");
+    let t = build_trigger(&config, &ctx("main"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert_eq!(t.jobs[0].project.name, "prod");
+    let t = build_trigger(&config, &ctx("feature/x"), &github)
+        .await
+        .unwrap()
+        .expect("trigger");
+    assert!(t.jobs.is_empty());
+}
+
+#[test]
+fn branch_filter_notes_explain_unmatched_selectors() {
+    use super::pr_event::branch_filter_notes;
+    let tmp = tempfile::tempdir().unwrap();
+    let config = load_from_str(
+        "projects:\n  - name: prod\n    dir: infra/app\n    alias: production\n    branch: ^main$\n  - name: any\n    dir: infra/any\n",
+        tmp.path(),
+    )
+    .unwrap();
+    let notes = branch_filter_notes(
+        &config,
+        &[
+            "prod".into(),
+            "production".into(),
+            "any".into(),
+            "nope".into(),
+        ],
+        "develop",
+    );
+    assert_eq!(notes.len(), 2);
+    assert!(notes[0].contains(
+        "project 'prod' only runs for pull requests into branches matching `^main$`, not `develop`"
+    ));
+    assert!(notes[1].starts_with("project 'production'"));
+    assert!(branch_filter_notes(&config, &["prod".into()], "main").is_empty());
+}
