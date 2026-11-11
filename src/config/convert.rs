@@ -109,6 +109,16 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
     validate_projects(&projects, &workflows)?;
     let graph = DependencyGraph::build(&projects)?;
 
+    let autoplan_modules = raw.autoplan_modules.unwrap_or(false);
+    if autoplan_modules {
+        for p in &mut projects {
+            p.module_dirs = modules::local_module_dirs(dir, &p.dir);
+            if !p.module_dirs.is_empty() {
+                tracing::debug!(project = %p.name, modules = ?p.module_dirs, "local modules");
+            }
+        }
+    }
+
     let mut allowed_providers = Vec::new();
     for p in &raw.allowed_providers {
         let n = crate::engine::providers::normalize(p)
@@ -137,6 +147,7 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         concurrency,
         comment,
         wakeup_words,
+        autoplan_modules,
         graph,
     })
 }
@@ -280,6 +291,7 @@ fn convert_project(p: RawProject) -> Result<Project, ConfigError> {
         name: p.name,
         dir: p.dir,
         generated: false,
+        module_dirs: vec![],
     })
 }
 

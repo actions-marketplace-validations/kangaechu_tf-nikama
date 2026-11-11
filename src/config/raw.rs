@@ -39,6 +39,10 @@ pub struct RawConfig {
     /// Word(s) a PR comment must start with to be treated as a command
     /// (`nikama plan`, ...). A string or a list; replaces the defaults.
     pub wakeup_word: Option<OneOrMany>,
+    /// Treat local modules referenced from a project (`module` blocks with a
+    /// `./` or `../` source, followed transitively) as part of the project
+    /// when computing impacted projects.
+    pub autoplan_modules: Option<bool>,
 
     // ---- unsupported keys (backend-only or unused in Digger) ----
     pub respect_layers: Option<Value>,

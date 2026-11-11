@@ -161,6 +161,7 @@ mod tests {
             aws_role_to_assume: None,
             aws_cognito_oidc: None,
             generated: false,
+            module_dirs: vec![],
         }
     }
 

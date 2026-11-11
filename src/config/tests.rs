@@ -599,3 +599,68 @@ fn workflow_configuration_accepts_the_configured_wakeup_word() {
     let r = load("projects: []\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"tf plan\"]\n");
     assert!(err_msg(r).contains("unknown command 'tf plan'"));
 }
+
+#[test]
+fn autoplan_modules_impacts_projects_through_local_modules() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_tree(
+        tmp.path(),
+        &["infra/app", "infra/net", "modules/vpc", "modules/subnet"],
+    );
+    std::fs::write(
+        tmp.path().join("infra/app/main.tf"),
+        "module \"vpc\" {\n  source = \"../../modules/vpc\"\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("modules/vpc/main.tf"),
+        "module \"subnet\" {\n  source = \"../subnet\"\n}\n",
+    )
+    .unwrap();
+    let yaml = "projects:\n  - name: app\n    dir: infra/app\n  - name: net\n    dir: infra/net\n";
+
+    // Off by default: a module change impacts nothing.
+    let c = load_from_str(yaml, tmp.path()).unwrap();
+    assert!(!c.autoplan_modules);
+    assert!(c.projects[0].module_dirs.is_empty());
+    assert!(impacted_projects(&c, &["modules/subnet/main.tf".into()]).is_empty());
+
+    let c = load_from_str(&format!("{yaml}autoplan_modules: true\n"), tmp.path()).unwrap();
+    assert!(c.autoplan_modules);
+    assert_eq!(
+        c.projects[0].module_dirs,
+        vec!["modules/subnet", "modules/vpc"]
+    );
+    assert!(c.projects[1].module_dirs.is_empty());
+    assert_eq!(
+        names(&impacted_projects(&c, &["modules/subnet/main.tf".into()])),
+        vec!["app"]
+    );
+    assert_eq!(
+        names(&impacted_projects(&c, &["modules/vpc/README.md".into()])),
+        vec!["app"]
+    );
+    assert!(impacted_projects(&c, &["modules/other/main.tf".into()]).is_empty());
+}
+
+#[test]
+fn autoplan_modules_applies_to_generated_projects() {
+    let tmp = tempfile::tempdir().unwrap();
+    make_tree(tmp.path(), &["services/api", "modules/svc"]);
+    std::fs::write(
+        tmp.path().join("services/api/main.tf"),
+        "module \"svc\" {\n  source = \"../../modules/svc\"\n}\n",
+    )
+    .unwrap();
+    let c = load_from_str(
+        "generate_projects:\n  include: \"services/**\"\nautoplan_modules: true\n",
+        tmp.path(),
+    )
+    .unwrap();
+    assert_eq!(c.projects.len(), 1);
+    assert_eq!(c.projects[0].module_dirs, vec!["modules/svc"]);
+    assert_eq!(
+        names(&impacted_projects(&c, &["modules/svc/main.tf".into()])),
+        vec![c.projects[0].name.as_str()]
+    );
+}

@@ -132,6 +132,7 @@ pub(super) fn generate_projects(
                     aws_role_to_assume: aws_role.clone(),
                     aws_cognito_oidc: cognito.clone(),
                     generated: true,
+                    module_dirs: vec![],
                 });
             }
         }
@@ -193,6 +194,7 @@ pub(super) fn generate_projects(
                 aws_role_to_assume: aws_role.clone(),
                 aws_cognito_oidc: cognito.clone(),
                 generated: true,
+                module_dirs: vec![],
             });
         }
     }
