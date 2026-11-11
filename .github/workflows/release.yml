@@ -22,9 +22,6 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             asset: nikama-darwin-aarch64
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
-            asset: nikama-darwin-x86_64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     permissions:
