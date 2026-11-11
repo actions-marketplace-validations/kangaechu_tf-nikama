@@ -17,6 +17,7 @@ For a flat list of every input, key and variable with its default, see
 - [Local modules](#local-modules)
 - [Wakeup word](#wakeup-word)
 - [Extra arguments on comments](#extra-arguments-on-comments)
+- [Lock and plan storage providers](#lock-and-plan-storage-providers)
 - [Auto-merge and branch protection](#auto-merge-and-branch-protection)
 - [Who can run commands](#who-can-run-commands)
 - [Trusting the configuration](#trusting-the-configuration)
@@ -252,6 +253,72 @@ How `apply` picks them up depends on plan storage:
   does not accept planning options together with a saved plan.
 - Without plan storage, `apply` plans immediately before applying, so give
   it the same arguments: `nikama apply -p app -- -target=module.vpc`.
+
+## Lock and plan storage providers
+
+PR locks and plan files live in your own cloud account. The lock provider is
+chosen with `lock-provider`, plan storage with `upload-plan-destination`; the
+two are independent, and plan storage may be left off (an apply then plans
+immediately before applying).
+
+### AWS: DynamoDB locks (default)
+
+`lock-provider: aws` keeps locks in a DynamoDB table named by `lock-table`
+(default `DiggerDynamoDBLockTable`, shared with Digger). nikama creates the
+table on first use, so the role needs `dynamodb:DescribeTable` and
+`dynamodb:CreateTable` besides `dynamodb:GetItem`, `dynamodb:Query`,
+`dynamodb:UpdateItem` and `dynamodb:DeleteItem` on the table. If you would
+rather not grant `CreateTable`, create the table yourself: partition key `PK`
+(string), sort key `SK` (string), on-demand capacity.
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          upload-plan-destination: aws
+          upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+### AWS: S3 locks
+
+`lock-provider: s3` keeps everything in S3 and needs no DynamoDB permissions.
+Lock objects are created with `If-None-Match: *`, so two runs cannot both
+take the same project. The role needs `s3:PutObject`, `s3:GetObject`,
+`s3:DeleteObject` and `s3:ListBucket` on the lock bucket, which can be the
+plan bucket.
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          lock-provider: s3
+          aws-lock-bucket: my-lock-bucket
+          upload-plan-destination: aws
+          upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+### Google Cloud: Cloud Storage
+
+Replace the AWS credentials step with `google-github-actions/auth` and point
+the action at Cloud Storage buckets. The service account needs
+`roles/storage.objectUser` on both buckets. Lock objects and plan files are
+compatible with Digger's `gcp` providers.
+
+```yaml
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
+          service_account: nikama@my-project.iam.gserviceaccount.com
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          lock-provider: gcp
+          google-lock-bucket: my-lock-bucket
+          upload-plan-destination: gcp
+          upload-plan-destination-gcp-bucket: my-plan-bucket
+```
+
+### No locks
+
+`lock-provider: noop` (or `pr_locks: disabled` in `nikama.yml`) runs without
+locks. Use it only where two pull requests can never touch the same state.
 
 ## Auto-merge and branch protection
 

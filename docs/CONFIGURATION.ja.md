@@ -16,6 +16,7 @@
 - [ローカルモジュール](#ローカルモジュール)
 - [ウェイクアップワード](#ウェイクアップワード)
 - [コメントでの追加引数](#コメントでの追加引数)
+- [ロックと plan 保存のプロバイダ](#ロックと-plan-保存のプロバイダ)
 - [自動マージとブランチ保護](#自動マージとブランチ保護)
 - [コマンドを実行できる人](#コマンドを実行できる人)
 - [設定の信頼](#設定の信頼)
@@ -65,7 +66,8 @@
    別のコミットの plan は拒否されます。
 7. コミットステータスが success / failure に設定されます。`auto_merge` は
    すべての apply が成功した場合に PR をマージします（ベースブランチが保護されている
-   場合は「自動マージとブランチ保護」を参照）。影響するプロジェクトがない push は `digger/plan` と `digger/apply` の両方を success にし、変更のある
+   場合は「自動マージとブランチ保護」を参照）。影響するプロジェクトがない
+   push は `digger/plan` と `digger/apply` の両方を success にし、変更のある
    プロジェクトがない plan 実行も `digger/apply` を success にします。そのため、
    どちらも apply するものがない PR をブロックすることなく必須チェックとして使えます。
 
@@ -245,6 +247,72 @@ allowed_plan_args:
   保存済み plan と plan オプションの併用を受け付けないためです。
 - plan 保存がない場合、`apply` は直前に plan を実行するため、同じ引数を
   渡してください: `nikama apply -p app -- -target=module.vpc`。
+
+## ロックと plan 保存のプロバイダ
+
+PR ロックと plan ファイルは自分のクラウドアカウントに置きます。ロックの置き場所は
+`lock-provider`、plan の保存先は `upload-plan-destination` で選び、両者は独立して
+います。plan 保存は省略でき、その場合 apply は直前に plan を実行します。
+
+### AWS: DynamoDB ロック（デフォルト）
+
+`lock-provider: aws` は、`lock-table` で指定した DynamoDB テーブル（デフォルト
+`DiggerDynamoDBLockTable`、Digger と共用）にロックを置きます。テーブルは初回利用時に
+nikama が作成するため、ロールにはテーブルに対する `dynamodb:GetItem`、
+`dynamodb:Query`、`dynamodb:UpdateItem`、`dynamodb:DeleteItem` に加えて
+`dynamodb:DescribeTable` と `dynamodb:CreateTable` が必要です。`CreateTable` を
+付与したくない場合は、パーティションキー `PK`（文字列）、ソートキー `SK`（文字列）、
+オンデマンドキャパシティでテーブルを事前に作成してください。
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          upload-plan-destination: aws
+          upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+### AWS: S3 ロック
+
+`lock-provider: s3` はすべてを S3 に置き、DynamoDB の権限を必要としません。ロック
+オブジェクトは `If-None-Match: *` 付きで作成されるため、2 つの実行が同じ
+プロジェクトを同時に取得することはありません。ロールにはロックバケットに対する
+`s3:PutObject`、`s3:GetObject`、`s3:DeleteObject`、`s3:ListBucket` が必要です。
+ロックバケットは plan バケットと兼用できます。
+
+```yaml
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          lock-provider: s3
+          aws-lock-bucket: my-lock-bucket
+          upload-plan-destination: aws
+          upload-plan-destination-s3-bucket: my-plan-bucket
+```
+
+### Google Cloud: Cloud Storage
+
+AWS の認証ステップを `google-github-actions/auth` に置き換え、アクションの向き先を
+Cloud Storage のバケットにします。サービスアカウントには両方のバケットに対する
+`roles/storage.objectUser` が必要です。ロックオブジェクトと plan ファイルは Digger の
+`gcp` プロバイダと互換性があります。
+
+```yaml
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
+          service_account: nikama@my-project.iam.gserviceaccount.com
+      - uses: kangaechu/tf-nikama@v0.3.0
+        with:
+          lock-provider: gcp
+          google-lock-bucket: my-lock-bucket
+          upload-plan-destination: gcp
+          upload-plan-destination-gcp-bucket: my-plan-bucket
+```
+
+### ロックなし
+
+`lock-provider: noop`（または `nikama.yml` の `pr_locks: disabled`）はロックなしで
+実行します。2 つのプルリクエストが同じ state に触れることが決してない場合にだけ
+使ってください。
 
 ## 自動マージとブランチ保護
 
