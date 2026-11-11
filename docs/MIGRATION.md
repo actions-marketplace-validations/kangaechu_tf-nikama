@@ -1,5 +1,7 @@
 # Migrating from Digger (backendless mode)
 
+[日本語版](MIGRATION.ja.md)
+
 This guide is for repositories that run Digger with `no-backend: true` and
 want to switch to tf-nikama. If you use the Digger backend / orchestrator,
 Terragrunt, Pulumi or Azure, tf-nikama is not a drop-in replacement; see
@@ -103,8 +105,8 @@ jobs:
       pull-requests: write
       statuses: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::123456789012:role/digger
           aws-region: ap-northeast-1
@@ -135,14 +137,14 @@ jobs:
       statuses: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.0
           terraform_wrapper: false
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: arn:aws:iam::123456789012:role/digger
           aws-region: ap-northeast-1
@@ -176,8 +178,8 @@ What changed and why:
   for PR runs. Add `issues: write` only for drift detection with
   `drift-github-issues: true`, and `contents: write` only for `auto_merge`.
   If the base branch restricts who can push, `GITHUB_TOKEN` cannot merge at
-  all; see "Auto-merge and branch protection" in the README for the GitHub
-  App setup.
+  all; see "Auto-merge and branch protection" in [CONFIGURATION.md](CONFIGURATION.md)
+  for the GitHub App setup.
 - **Plugin cache.** `cache-dependencies: true` set `TF_PLUGIN_CACHE_DIR` and
   wired up `actions/cache`. tf-nikama does not do this. If you want a provider
   cache, set `TF_PLUGIN_CACHE_DIR` and add `actions/cache` yourself; when the
@@ -210,8 +212,8 @@ What changed and why:
 | `drift-github-issues` | same | Unchanged. Issues are labelled `digger`. |
 | `github-token` | `github-token` | Unchanged. |
 | (none) | `max-parallel`, `log-level`, `version` | New. |
-| (none) | `config-ref`, `allow-run-steps` | New. Read `nikama.yml` from a trusted ref on PR runs / refuse `run:` steps (README "Trusting the configuration"). |
-| (none) | `allowed-providers` | New. Only the listed Terraform providers can be installed (README "Restricting providers"). |
+| (none) | `config-ref`, `allow-run-steps` | New. Read `nikama.yml` from a trusted ref on PR runs / refuse `run:` steps ([CONFIGURATION.md](CONFIGURATION.md) "Trusting the configuration"). |
+| (none) | `allowed-providers` | New. Only the listed Terraform providers can be installed ([CONFIGURATION.md](CONFIGURATION.md) "Restricting providers"). |
 
 ### Manual and drift workflows
 
@@ -262,14 +264,14 @@ These change what you see, not what you configure.
 | Unknown project in `-p` | run fails | warned in the comment, rest runs |
 | `digger help` | exits 7 when there are impacted projects | posts help, exits 0 |
 | Comment on a plain issue | API error | ignored, exits 0 |
-| Comment command from a user without write access | runs | refused with a comment, exits 0 (see README "Who can run commands") |
+| Comment command from a user without write access | runs | refused with a comment, exits 0 (see [CONFIGURATION.md](CONFIGURATION.md) "Who can run commands") |
 | `approved` requirement | any user's review counts | only reviews from users with write access count, as with branch protection |
 | `ready_for_review` | ignored | runs `on_pull_request_pushed` |
-| Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see README "How a run works") |
-| Lock on apply only | not available | `pr_locks: on_apply`; `true` / `false` keep their meaning (see README "How a run works") |
-| Terraform arguments on a comment | not available | `nikama plan -- -target=...`, limited by `allowed_plan_args` (see README "Extra arguments on comments") |
-| Changes to a local module | project not impacted unless `include_patterns` lists the module | `autoplan_modules: true` follows `module` sources (see README "Local modules") |
-| Project `branch` | accepted, not used for project selection | regular expression on the PR's base branch; non-matching projects are not impacted (see README "Base branch filter") |
+| Plan without locks | not available | `digger plan --no-lock` on a comment, or the `no_lock_label` label (see [CONFIGURATION.md](CONFIGURATION.md) "PR locks") |
+| Lock on apply only | not available | `pr_locks: on_apply`; `true` / `false` keep their meaning (see [CONFIGURATION.md](CONFIGURATION.md) "PR locks") |
+| Terraform arguments on a comment | not available | `nikama plan -- -target=...`, limited by `allowed_plan_args` (see [CONFIGURATION.md](CONFIGURATION.md) "Extra arguments on comments") |
+| Changes to a local module | project not impacted unless `include_patterns` lists the module | `autoplan_modules: true` follows `module` sources (see [CONFIGURATION.md](CONFIGURATION.md) "Local modules") |
+| Project `branch` | accepted, not used for project selection | regular expression on the PR's base branch; non-matching projects are not impacted (see [CONFIGURATION.md](CONFIGURATION.md) "Base branch filter") |
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |
 | Replace in plan summary | counted as create or delete | own column (`±`) |
 | `destroy` failure (manual mode) | reported as success | reported as failure |
