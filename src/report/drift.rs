@@ -167,13 +167,13 @@ pub fn from_env(
     wakeup_word: &str,
 ) -> anyhow::Result<Box<dyn DriftNotifier>> {
     if let Some(url) = crate::util::env_first(&[
-        "INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL",
         "NIKAMA_DRIFT_SLACK_WEBHOOK_URL",
+        "INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL",
     ]) {
         return Ok(Box::new(SlackWebhook::new(&url)));
     }
-    if crate::util::env_opt("INPUT_DRIFT_GITHUB_ISSUES").is_some()
-        || crate::util::env_is_true("NIKAMA_DRIFT_GITHUB_ISSUES")
+    if crate::util::env_is_true("NIKAMA_DRIFT_GITHUB_ISSUES")
+        || crate::util::env_is_true("INPUT_DRIFT_GITHUB_ISSUES")
     {
         return Ok(Box::new(GithubIssueNotifier::new(
             github.clone(),

@@ -245,15 +245,17 @@ STS の代わりに Cognito ID プールから取得する認証情報。
 | `--local` | `NIKAMA_LOCAL` | GitHub Actions の検出をスキップします。手動モードをローカルで実行するときに使います。 |
 | `--validate` | | 設定を読み込んで検証し、プロジェクトを表示して終了します。 |
 
+`NIKAMA_*` 名と Digger 互換名（`DIGGER_*`、`INPUT_DIGGER_*`、`INPUT_DRIFT_*`）の両方がある変数は、両方設定されている場合 `NIKAMA_*` が優先され、Digger 名はフォールバックです。空文字列は未設定として扱います。
+
 | 環境変数 | 説明 |
 |---|---|
-| `DIGGER_GITHUB_TOKEN`、`NIKAMA_GITHUB_TOKEN`、`GITHUB_TOKEN` | GitHub API トークン（PR モードで必須）。ワークフローの `env:` に `DIGGER_GITHUB_TOKEN` が残っていると `github-token` 入力より優先されます。 |
+| `NIKAMA_GITHUB_TOKEN`、`DIGGER_GITHUB_TOKEN`、`GITHUB_TOKEN` | GitHub API トークン（PR モードで必須）。この順で優先されます。ワークフローの `env:` に `DIGGER_GITHUB_TOKEN` が残っていると `github-token` 入力（アクションは `GITHUB_TOKEN` として渡します）より優先されます。 |
 | `GITHUB_CONTEXT` | `github` コンテキストの JSON（PR モードで必須）。 |
 | `GITHUB_REPOSITORY` | `owner/repo`。 |
 | `GITHUB_API_URL` | GitHub Enterprise の API ベース URL。`api.github.com` を指す場合は無視されます。 |
-| `INPUT_DIGGER_MODE`、`NIKAMA_MODE` | `` / `manual` / `drift-detection`。 |
-| `INPUT_DIGGER_COMMAND`、`NIKAMA_COMMAND` | 手動モードのコマンド。 |
-| `INPUT_DIGGER_PROJECT`、`NIKAMA_PROJECT` | 手動モードのプロジェクト。 |
+| `NIKAMA_MODE`、`INPUT_DIGGER_MODE` | `` / `manual` / `drift-detection`。 |
+| `NIKAMA_COMMAND`、`INPUT_DIGGER_COMMAND` | 手動モードのコマンド。 |
+| `NIKAMA_PROJECT`、`INPUT_DIGGER_PROJECT` | 手動モードのプロジェクト。 |
 | `INPUT_DIGGER_BLOCK_FILTERS` | ドリフトモードのブロックフィルタ。 |
 | `NIKAMA_CONFIG_REF` | 信頼された設定の ref（`config-ref`）。 |
 | `NIKAMA_ALLOW_RUN_STEPS` | `false` で `run:` ステップを拒否。 |
@@ -268,8 +270,8 @@ STS の代わりに Cognito ID プールから取得する認証情報。
 | `PLAN_UPLOAD_S3_ENCRYPTION_ENABLED`、`PLAN_UPLOAD_S3_ENCRYPTION_TYPE`、`PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID` | S3 の plan 暗号化。 |
 | `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` | Cloud Storage の plan バケット。 |
 | `REPORTING_STRATEGY` | `comments_per_run`、`latest_run_comment`、`per_project`。 |
-| `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`、`NIKAMA_DRIFT_SLACK_WEBHOOK_URL` | ドリフト通知の Slack webhook。 |
-| `INPUT_DRIFT_GITHUB_ISSUES`、`NIKAMA_DRIFT_GITHUB_ISSUES` | ドリフト通知を GitHub Issue にする。どちらかが設定されていれば有効。 |
+| `NIKAMA_DRIFT_SLACK_WEBHOOK_URL`、`INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL` | ドリフト通知の Slack webhook。 |
+| `NIKAMA_DRIFT_GITHUB_ISSUES`、`INPUT_DRIFT_GITHUB_ISSUES` | ドリフト通知を GitHub Issue にする。どちらかが `true` なら有効。 |
 | `TF_PLUGIN_CACHE_DIR` | 設定されていると `init` ステップを 1 つずつ実行。 |
 | `NIKAMA_SERIALIZE_INIT` | `true` でも `init` ステップを 1 つずつ実行。 |
 | `TF_CLI_CONFIG_FILE` | 既存の Terraform CLI 設定。`allowed-providers` 設定時は維持したうえで拡張されます。 |

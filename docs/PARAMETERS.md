@@ -246,15 +246,19 @@ an empty value counts as unset.
 | `--local` | `NIKAMA_LOCAL` | Skip the GitHub Actions detection, for local manual runs. |
 | `--validate` | | Load and validate the configuration, print the projects, exit. |
 
+Where a variable has both a `NIKAMA_*` name and a Digger-compatible name
+(`DIGGER_*`, `INPUT_DIGGER_*`, `INPUT_DRIFT_*`), the `NIKAMA_*` name wins when
+both are set; the Digger name is a fallback. Empty values count as unset.
+
 | Environment variable | Description |
 |---|---|
-| `DIGGER_GITHUB_TOKEN`, `NIKAMA_GITHUB_TOKEN`, `GITHUB_TOKEN` | GitHub API token (required for PR mode). A `DIGGER_GITHUB_TOKEN` left in the workflow `env:` wins over the `github-token` input. |
+| `NIKAMA_GITHUB_TOKEN`, `DIGGER_GITHUB_TOKEN`, `GITHUB_TOKEN` | GitHub API token (required for PR mode), in that order of precedence. A `DIGGER_GITHUB_TOKEN` left in the workflow `env:` wins over the `github-token` input (which the action passes as `GITHUB_TOKEN`). |
 | `GITHUB_CONTEXT` | JSON of the `github` context (required for PR mode). |
 | `GITHUB_REPOSITORY` | `owner/repo`. |
 | `GITHUB_API_URL` | API base for GitHub Enterprise; ignored when it points at `api.github.com`. |
-| `INPUT_DIGGER_MODE`, `NIKAMA_MODE` | `` / `manual` / `drift-detection`. |
-| `INPUT_DIGGER_COMMAND`, `NIKAMA_COMMAND` | Manual mode command. |
-| `INPUT_DIGGER_PROJECT`, `NIKAMA_PROJECT` | Manual mode project. |
+| `NIKAMA_MODE`, `INPUT_DIGGER_MODE` | `` / `manual` / `drift-detection`. |
+| `NIKAMA_COMMAND`, `INPUT_DIGGER_COMMAND` | Manual mode command. |
+| `NIKAMA_PROJECT`, `INPUT_DIGGER_PROJECT` | Manual mode project. |
 | `INPUT_DIGGER_BLOCK_FILTERS` | Drift mode block filter. |
 | `NIKAMA_CONFIG_REF` | Trusted configuration ref (`config-ref`). |
 | `NIKAMA_ALLOW_RUN_STEPS` | `false` refuses `run:` steps. |
@@ -269,8 +273,8 @@ an empty value counts as unset.
 | `PLAN_UPLOAD_S3_ENCRYPTION_ENABLED`, `PLAN_UPLOAD_S3_ENCRYPTION_TYPE`, `PLAN_UPLOAD_S3_ENCRYPTION_KMS_ID` | S3 plan encryption. |
 | `GOOGLE_STORAGE_PLAN_ARTEFACT_BUCKET` | Cloud Storage plan bucket. |
 | `REPORTING_STRATEGY` | `comments_per_run`, `latest_run_comment` or `per_project`. |
-| `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL`, `NIKAMA_DRIFT_SLACK_WEBHOOK_URL` | Slack webhook for drift notifications. |
-| `INPUT_DRIFT_GITHUB_ISSUES`, `NIKAMA_DRIFT_GITHUB_ISSUES` | Drift notifications as GitHub Issues; enabled when either is set. |
+| `NIKAMA_DRIFT_SLACK_WEBHOOK_URL`, `INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL` | Slack webhook for drift notifications. |
+| `NIKAMA_DRIFT_GITHUB_ISSUES`, `INPUT_DRIFT_GITHUB_ISSUES` | Drift notifications as GitHub Issues; enabled when either is `true`. |
 | `TF_PLUGIN_CACHE_DIR` | When set, `init` steps run one at a time. |
 | `NIKAMA_SERIALIZE_INIT` | `true` also runs `init` steps one at a time. |
 | `TF_CLI_CONFIG_FILE` | Existing Terraform CLI configuration; kept and extended when `allowed-providers` is set. |
