@@ -388,12 +388,19 @@ fn summarize_counts() {
     );
 }
 
-#[tokio::test]
-async fn run_by_levels_skips_dependents_of_failed_jobs() {
+/// Applies four projects whose directories do not exist, so every job that
+/// actually runs fails: `a` and `c` in level 0, `b` (depends on `a`) in
+/// level 1, `d` (depends on `b`) in level 2. Returns `(project, outcome)`
+/// where the outcome is `Err` for a job that ran and failed, or the skip
+/// reason.
+async fn run_levels_with(on_failure: &str) -> Vec<(String, Result<String, ()>)> {
     let tmp = tempfile::tempdir().unwrap();
     let config = Arc::new(
         load_from_str(
-            "projects:\n  - name: a\n    dir: missing/a\n  - name: b\n    dir: missing/b\n    depends_on: [a]\n  - name: c\n    dir: missing/c\n",
+            &format!(
+                "dependency_configuration:\n  on_failure: {}\nprojects:\n  - name: a\n    dir: missing/a\n  - name: b\n    dir: missing/b\n    depends_on: [a]\n  - name: c\n    dir: missing/c\n  - name: d\n    dir: missing/d\n    depends_on: [b]\n",
+                on_failure
+            ),
             tmp.path(),
         )
         .unwrap(),
@@ -429,17 +436,64 @@ async fn run_by_levels_skips_dependents_of_failed_jobs() {
     });
     let mut results = run_by_levels(ctx, jobs, 2).await;
     results.sort_by(|x, y| x.project.cmp(&y.project));
-    assert_eq!(results.len(), 3);
-    // `a` and `c` fail because their directories do not exist; `b` is skipped.
-    assert!(
-        results[0].outcome.is_err(),
-        "a should fail: {:?}",
-        results[0]
+    assert_eq!(results.len(), 4);
+    results
+        .into_iter()
+        .map(|r| {
+            let outcome = match r.outcome {
+                Ok(Outcome::Skipped(reason)) => Ok(reason),
+                Ok(other) => panic!("{} unexpectedly succeeded: {:?}", r.project, other),
+                Err(_) => Err(()),
+            };
+            (r.project, outcome)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn run_by_levels_skips_dependents_of_failed_jobs() {
+    let results = run_levels_with("skip_dependents").await;
+    // `a` and `c` run and fail; `b` is skipped because `a` failed and `d`
+    // because `b` was skipped, while the unrelated `c` still runs.
+    assert_eq!(
+        results,
+        vec![
+            ("a".to_string(), Err(())),
+            ("b".to_string(), Ok("dependency a failed".to_string())),
+            ("c".to_string(), Err(())),
+            ("d".to_string(), Ok("dependency b failed".to_string())),
+        ]
     );
+}
+
+#[tokio::test]
+async fn run_by_levels_abort_skips_every_later_level() {
+    let results = run_levels_with("abort").await;
+    assert_eq!(results[0], ("a".to_string(), Err(())));
+    assert_eq!(results[2], ("c".to_string(), Err(())));
+    // Level 0 runs to completion; `b` and `d` are skipped, naming whichever
+    // level-0 project was recorded as failing first.
+    for (name, outcome) in [&results[1], &results[3]] {
+        let reason = outcome
+            .as_ref()
+            .unwrap_or_else(|_| panic!("{} should be skipped", name));
+        assert!(
+            reason == "run aborted because a failed" || reason == "run aborted because c failed",
+            "{}: {}",
+            name,
+            reason
+        );
+    }
+}
+
+#[tokio::test]
+async fn run_by_levels_continue_runs_dependents_anyway() {
+    let results = run_levels_with("continue").await;
     assert!(
-        matches!(&results[1].outcome, Ok(Outcome::Skipped(reason)) if reason.contains("dependency a failed"))
+        results.iter().all(|(_, outcome)| outcome.is_err()),
+        "every project should have run: {:?}",
+        results
     );
-    assert!(results[2].outcome.is_err());
 }
 
 /// In-memory plan storage that is configured (not noop). Empty by default.

@@ -23,6 +23,23 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         }
     };
 
+    let on_failure = match raw
+        .dependency_configuration
+        .as_ref()
+        .and_then(|d| d.on_failure.as_deref())
+        .unwrap_or("skip_dependents")
+    {
+        "skip_dependents" => OnFailure::SkipDependents,
+        "abort" => OnFailure::Abort,
+        "continue" => OnFailure::Continue,
+        other => {
+            return Err(ConfigError::Validation(format!(
+                "dependency_configuration.on_failure must be 'skip_dependents', 'abort' or 'continue', got '{}'",
+                other
+            )))
+        }
+    };
+
     let auto_merge_strategy = match raw.auto_merge_strategy.as_deref().unwrap_or("squash") {
         "squash" => MergeStrategy::Squash,
         "merge" => MergeStrategy::Merge,
@@ -175,6 +192,7 @@ pub(super) fn convert(raw: RawConfig, dir: &Path) -> Result<Config, ConfigError>
         projects,
         workflows,
         dependency_mode,
+        on_failure,
         traverse_to_nested_projects,
         auto_merge: raw.auto_merge.unwrap_or(false),
         auto_merge_strategy,

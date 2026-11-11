@@ -95,6 +95,7 @@ Unknown keys are errors. The file is read from the checkout unless
 | `workflows` | `{default: ...}` | Named workflows; see [`workflows.<name>`](#workflowsname). The `default` workflow always exists. |
 | `generate_projects` | none | Discover projects from directories; see [`generate_projects`](#generate_projects). |
 | `dependency_configuration.mode` | `hard` | `hard`: a change to a project also plans its downstream `depends_on` projects. `soft`: dependencies only order applies. |
+| `dependency_configuration.on_failure` | `skip_dependents` | What happens to the remaining applies when a project fails. `skip_dependents`: projects that depend on it (directly or transitively) are skipped, unrelated projects still apply. `abort`: every later dependency level is skipped. `continue`: dependents apply anyway. See "How a run works" in [CONFIGURATION.md](CONFIGURATION.md). |
 | `traverse_to_nested_projects` | `true` | Whether `generate_projects` descends into a directory that is itself a project. |
 | `auto_merge` | `false` | Merge the pull request when every apply succeeded. |
 | `auto_merge_strategy` | `squash` | `squash`, `merge` or `rebase`. |

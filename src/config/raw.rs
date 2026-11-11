@@ -141,6 +141,7 @@ impl OneOrMany {
 #[serde(deny_unknown_fields)]
 pub struct RawDependencyConfiguration {
     pub mode: Option<String>,
+    pub on_failure: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]

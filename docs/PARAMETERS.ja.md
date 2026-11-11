@@ -94,6 +94,7 @@
 | `workflows` | `{default: ...}` | 名前付きワークフロー。[`workflows.<name>`](#workflowsname) 参照。`default` ワークフローは常に存在します。 |
 | `generate_projects` | なし | ディレクトリからプロジェクトを自動検出します。[`generate_projects`](#generate_projects) 参照。 |
 | `dependency_configuration.mode` | `hard` | `hard`: プロジェクトの変更で、下流の `depends_on` プロジェクトも plan します。`soft`: 依存関係は apply の順序にだけ使います。 |
+| `dependency_configuration.on_failure` | `skip_dependents` | プロジェクトが失敗したときの残りの apply の扱い。`skip_dependents`: そのプロジェクトに（直接または推移的に）依存するプロジェクトをスキップし、無関係なプロジェクトは apply します。`abort`: 以降の依存レベルをすべてスキップします。`continue`: 依存するプロジェクトもそのまま apply します。[CONFIGURATION.ja.md](CONFIGURATION.ja.md) の「実行の流れ」参照。 |
 | `traverse_to_nested_projects` | `true` | `generate_projects` が、それ自体がプロジェクトであるディレクトリの中まで探索するかどうか。 |
 | `auto_merge` | `false` | すべての apply が成功したらプルリクエストをマージします。 |
 | `auto_merge_strategy` | `squash` | `squash`、`merge`、`rebase`。 |
