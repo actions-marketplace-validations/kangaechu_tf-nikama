@@ -475,6 +475,8 @@ README のクイックスタートの `if:` ガードは、リポジトリ外か
 | `NIKAMA_ALLOWED_PROVIDERS` | プロバイダ許可リスト（「プロバイダの制限」参照） |
 | `TF_PLUGIN_CACHE_DIR` | 設定時、`init` ステップは 1 つずつ実行される |
 
+`NIKAMA_*` 名と Digger 互換名の両方がある変数は `NIKAMA_*` が優先されます。一覧は [PARAMETERS.ja.md](PARAMETERS.ja.md#バイナリ-フラグと環境変数) を参照してください。
+
 ## ローカルでの検証
 
 ```sh

@@ -100,14 +100,14 @@ pub async fn run() -> i32 {
         .or_else(|| std::env::current_dir().ok())
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let mode = crate::util::env_first(&["INPUT_DIGGER_MODE", "NIKAMA_MODE"])
+    let mode = crate::util::env_first(&["NIKAMA_MODE", "INPUT_DIGGER_MODE"])
         .unwrap_or_default()
         .to_ascii_lowercase();
     let pr_mode = matches!(mode.as_str(), "" | "pr" | "event");
 
     // GitHub identity.
     let token =
-        crate::util::env_first(&["DIGGER_GITHUB_TOKEN", "NIKAMA_GITHUB_TOKEN", "GITHUB_TOKEN"]);
+        crate::util::env_first(&["NIKAMA_GITHUB_TOKEN", "DIGGER_GITHUB_TOKEN", "GITHUB_TOKEN"]);
     let repository = crate::util::env_opt("GITHUB_REPOSITORY");
     let actor = crate::util::env_opt("GITHUB_ACTOR").unwrap_or_else(|| "unknown".to_string());
 

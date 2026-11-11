@@ -9,7 +9,7 @@ use crate::storage::NoopPlanStorage;
 use std::sync::Arc;
 
 pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -> i32 {
-    let command_str = match crate::util::env_first(&["INPUT_DIGGER_COMMAND", "NIKAMA_COMMAND"]) {
+    let command_str = match crate::util::env_first(&["NIKAMA_COMMAND", "INPUT_DIGGER_COMMAND"]) {
         Some(c) => c,
         None => {
             tracing::error!(
@@ -25,7 +25,7 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
             return exit::COMMAND;
         }
     };
-    let project_name = match crate::util::env_first(&["INPUT_DIGGER_PROJECT", "NIKAMA_PROJECT"]) {
+    let project_name = match crate::util::env_first(&["NIKAMA_PROJECT", "INPUT_DIGGER_PROJECT"]) {
         Some(p) => p,
         None => {
             tracing::error!("manual mode requires INPUT_DIGGER_PROJECT");

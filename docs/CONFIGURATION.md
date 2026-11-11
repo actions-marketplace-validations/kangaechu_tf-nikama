@@ -482,6 +482,10 @@ The action sets these for you; when running the binary directly:
 | `NIKAMA_ALLOWED_PROVIDERS` | provider allowlist (see "Restricting providers") |
 | `TF_PLUGIN_CACHE_DIR` | when set, `init` steps run one at a time |
 
+Where a `NIKAMA_*` name and a Digger-compatible name both exist, `NIKAMA_*`
+wins; see [PARAMETERS.md](PARAMETERS.md#binary-flags-and-environment-variables)
+for the full list.
+
 ## Validating locally
 
 ```sh
