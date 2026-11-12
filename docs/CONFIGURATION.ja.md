@@ -64,6 +64,10 @@
    それ以外の場合は apply の直前に生成した plan を使い、その要約をコメントに
    表示します。保存された plan には生成元の PR ヘッドコミットが記録されており、
    別のコミットの plan は拒否されます。
+   変更のない plan は apply しません。そのプロジェクトは *no changes* と報告され、
+   Terraform は実行されません（保存された plan は変更の有無を記録しているので、
+   判定のために `init` は走りません）。このプロジェクトも `auto_merge` の判定では
+   apply 済みとして扱われます。
    apply が失敗したときの残りの扱いは `dependency_configuration.on_failure`
    で決まります（デフォルト `skip_dependents`）。失敗したプロジェクトに直接または
    推移的に依存するプロジェクトは、失敗したプロジェクト名とともに *skipped* と

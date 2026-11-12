@@ -66,6 +66,10 @@ impl RunContext {
 pub enum Outcome {
     Plan(PlanResult),
     Apply(ApplyResult),
+    /// An apply job whose plan had no changes: Terraform was not run. The
+    /// plan is carried along when it was produced right before (no plan
+    /// storage); with a stored plan only its "no changes" flag is known.
+    ApplyNoChanges(Option<PlanResult>),
     Destroy(ApplyResult),
     Locked,
     Unlocked(bool),
@@ -153,6 +157,32 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
                         with_args,
                         p.summary.short()
                     ));
+                }
+            });
+        }
+        Ok(Outcome::ApplyNoChanges(pre_plan)) => {
+            let pre_plan = pre_plan.clone();
+            ctx.update(move |r| {
+                let row = r.row_mut(&n);
+                row.status = RowStatus::NoChanges;
+                row.detail_kind = Some(DetailKind::Plan);
+                match pre_plan {
+                    Some(p) => {
+                        row.summary_table = Some(plan_summary_table(&p.summary));
+                        row.plan_summary = Some(p.summary.clone());
+                        row.detail = Some(p.plan_text.clone());
+                        row.additional_output = p.additional_output.clone();
+                        r.notes.push(format!(
+                            "{}: no plan storage configured; planned immediately before apply and found no changes, so nothing was applied",
+                            n
+                        ));
+                    }
+                    None => {
+                        row.detail = Some(
+                            "No changes. The stored plan has nothing to apply, so Terraform was not run."
+                                .to_string(),
+                        );
+                    }
                 }
             });
         }
@@ -272,6 +302,7 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                         let meta = crate::storage::PlanMeta {
                             head_sha: ctx.head_sha.clone(),
                             extra_args: job.extra_args.clone(),
+                            no_changes: result.is_empty(),
                         };
                         if let Err(e) = ctx
                             .storage
@@ -299,10 +330,15 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
             // is the one reviewed in the PR; a missing file is an error, never
             // a blind `apply -auto-approve`. Without plan storage, plan right
             // now and apply exactly that file so the applied changes are
-            // recorded in the report.
+            // recorded in the report. A plan without changes is not applied
+            // at all: applying it would only cost an `init` and a state lock.
             let (plan_path, pre_plan) = if ctx.storage.is_noop() {
                 tracing::info!(project = %job.project.name, "no plan storage configured; planning before apply");
                 let plan = exec.plan().await.map_err(|e| format_exec_error(&e))?;
+                if plan.is_empty() {
+                    tracing::info!(project = %job.project.name, "plan has no changes; skipping apply");
+                    return Ok(Outcome::ApplyNoChanges(Some(plan)));
+                }
                 (plan.plan_file.clone(), Some(plan))
             } else {
                 match ctx.storage.retrieve(&job.plan_file_name()).await {
@@ -331,6 +367,11 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                                     n, args
                                 ))
                             });
+                        }
+                        if stored.no_changes {
+                            tracing::info!(project = %job.project.name, "stored plan has no changes; skipping apply");
+                            let _ = ctx.storage.delete(&job.plan_file_name()).await;
+                            return Ok(Outcome::ApplyNoChanges(None));
                         }
                         let p = exec.plan_file();
                         std::fs::write(&p, stored.bytes).map_err(|e| e.to_string())?;
