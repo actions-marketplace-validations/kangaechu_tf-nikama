@@ -1,7 +1,8 @@
 //! S3 plan storage.
 
 use super::{
-    decode_args, PlanMeta, PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY, PLAN_ARGS_METADATA_KEY,
+    decode_args, decode_no_changes, PlanMeta, PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY,
+    PLAN_ARGS_METADATA_KEY, PLAN_NO_CHANGES_METADATA_KEY,
 };
 use async_trait::async_trait;
 use aws_sdk_s3::error::SdkError;
@@ -81,6 +82,11 @@ impl PlanStorage for S3PlanStorage {
                         .and_then(|m| m.get(PLAN_ARGS_METADATA_KEY))
                         .map(String::as_str),
                 );
+                let no_changes = decode_no_changes(
+                    out.metadata()
+                        .and_then(|m| m.get(PLAN_NO_CHANGES_METADATA_KEY))
+                        .map(String::as_str),
+                );
                 let data = out
                     .body
                     .collect()
@@ -90,6 +96,7 @@ impl PlanStorage for S3PlanStorage {
                     bytes: data.into_bytes().to_vec(),
                     head_sha,
                     extra_args,
+                    no_changes,
                 }))
             }
             Err(SdkError::ServiceError(e)) if e.err().is_no_such_key() => Ok(None),

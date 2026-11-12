@@ -302,9 +302,16 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     writer_task.join().await;
 
     let failed = lock_failed || results.iter().any(|r| !r.is_ok());
+    // An apply job that found nothing to apply counts as applied: the PR is
+    // in the state it describes, which is what auto-merge is about.
     let applied = results
         .iter()
-        .filter(|r| matches!(r.outcome, Ok(Outcome::Apply(_))))
+        .filter(|r| {
+            matches!(
+                r.outcome,
+                Ok(Outcome::Apply(_)) | Ok(Outcome::ApplyNoChanges(_))
+            )
+        })
         .count();
     let description = summarize(&results, lock_failed);
     let _ = github

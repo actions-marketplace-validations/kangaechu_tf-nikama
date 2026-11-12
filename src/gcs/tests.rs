@@ -141,6 +141,7 @@ async fn plan_storage_round_trip() {
         .and(query_param("uploadType", "multipart"))
         .and(body_string_contains(r#""name":"o-r-5-proj.tfplan""#))
         .and(body_string_contains(r#""head-sha":"abc123""#))
+        .and(body_string_contains(r#""plan-no-changes":"true""#))
         .and(body_string_contains(
             "Content-Type: application/octet-stream\r\n\r\nPLAN",
         ))
@@ -158,7 +159,7 @@ async fn plan_storage_round_trip() {
         .and(path("/storage/v1/b/plans/o/o-r-5-proj.tfplan"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "name": "o-r-5-proj.tfplan",
-            "metadata": {"head-sha": "abc123", "plan-args": "[\"-target=module.x\"]"}
+            "metadata": {"head-sha": "abc123", "plan-args": "[\"-target=module.x\"]", "plan-no-changes": "true"}
         })))
         .mount(&server)
         .await;
@@ -178,6 +179,7 @@ async fn plan_storage_round_trip() {
         &PlanMeta {
             head_sha: Some("abc123".into()),
             extra_args: vec!["-target=module.x".into()],
+            no_changes: true,
         },
     )
     .await
@@ -189,6 +191,7 @@ async fn plan_storage_round_trip() {
             bytes: b"PLAN".to_vec(),
             head_sha: Some("abc123".to_string()),
             extra_args: vec!["-target=module.x".into()],
+            no_changes: true,
         })
     );
     s.delete("o-r-5-proj.tfplan").await.unwrap();

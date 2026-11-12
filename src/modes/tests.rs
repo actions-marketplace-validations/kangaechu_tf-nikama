@@ -504,6 +504,10 @@ struct MemoryStorage {
 
 impl MemoryStorage {
     fn with(key: &str, head_sha: Option<&str>) -> Self {
+        Self::with_flag(key, head_sha, false)
+    }
+
+    fn with_flag(key: &str, head_sha: Option<&str>, no_changes: bool) -> Self {
         let s = Self::default();
         s.plans.lock().unwrap().insert(
             key.to_string(),
@@ -511,6 +515,7 @@ impl MemoryStorage {
                 bytes: b"not-a-real-plan".to_vec(),
                 head_sha: head_sha.map(|h| h.to_string()),
                 extra_args: vec![],
+                no_changes,
             },
         );
         s
@@ -526,6 +531,7 @@ impl PlanStorage for MemoryStorage {
                 bytes: bytes.to_vec(),
                 head_sha: meta.head_sha.clone(),
                 extra_args: meta.extra_args.clone(),
+                no_changes: meta.no_changes,
             },
         );
         Ok(())
@@ -680,6 +686,46 @@ async fn apply_refuses_stored_plan_from_another_commit() {
 }
 
 #[tokio::test]
+async fn apply_skips_stored_plan_without_changes() {
+    // The fixture has no Terraform code, so any attempt to run Terraform
+    // would fail: the job must finish without touching it.
+    let (tmp, config) = demo_fixture(false);
+    let storage = Arc::new(MemoryStorage::with_flag(
+        "o-r-1-demo.tfplan",
+        Some("abc"),
+        true,
+    ));
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("abc"));
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    assert!(
+        matches!(result.outcome, Ok(Outcome::ApplyNoChanges(None))),
+        "{:?}",
+        result.outcome
+    );
+    // The plan is consumed like an applied one.
+    assert!(!storage.exists("o-r-1-demo.tfplan").await.unwrap());
+}
+
+#[tokio::test]
+async fn apply_still_checks_the_commit_of_a_plan_without_changes() {
+    let (tmp, config) = demo_fixture(false);
+    let storage = Arc::new(MemoryStorage::with_flag(
+        "o-r-1-demo.tfplan",
+        Some("old-sha"),
+        true,
+    ));
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("new-sha"));
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    let err = result.outcome.unwrap_err();
+    assert!(
+        err.contains("stored plan is from commit old-sha"),
+        "{}",
+        err
+    );
+    assert!(storage.exists("o-r-1-demo.tfplan").await.unwrap());
+}
+
+#[tokio::test]
 async fn apply_accepts_stored_plan_without_commit_metadata() {
     // No terraform in the fixture dir, so the job fails later at `init`;
     // what matters is that the commit check did not reject it.
@@ -721,6 +767,56 @@ async fn plan_stores_head_sha_with_the_plan_file() {
         .unwrap();
     assert_eq!(stored.head_sha.as_deref(), Some("head-123"));
     assert!(!stored.bytes.is_empty());
+    assert!(!stored.no_changes);
+}
+
+#[tokio::test]
+async fn plan_without_changes_is_flagged_and_apply_skips_it() {
+    if std::process::Command::new("terraform")
+        .arg("version")
+        .output()
+        .map(|o| !o.status.success())
+        .unwrap_or(true)
+    {
+        eprintln!("skipping: terraform not found on PATH");
+        return;
+    }
+    let (tmp, config) = demo_fixture(true);
+    // No resources at all: the plan is empty.
+    std::fs::write(tmp.path().join("infra/demo/main.tf"), "").unwrap();
+    let storage = Arc::new(MemoryStorage::default());
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("head-123"));
+    let mut plan_job = demo_apply_job(&config);
+    plan_job.command = Command::Plan;
+    let result = super::run::run_job(&ctx, plan_job).await;
+    match result.outcome {
+        Ok(Outcome::Plan(p)) => assert!(p.is_empty()),
+        other => panic!("expected plan outcome: {:?}", other),
+    }
+    assert!(
+        storage
+            .retrieve("o-r-1-demo.tfplan")
+            .await
+            .unwrap()
+            .unwrap()
+            .no_changes
+    );
+
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    assert!(
+        matches!(result.outcome, Ok(Outcome::ApplyNoChanges(None))),
+        "{:?}",
+        result.outcome
+    );
+    assert!(!storage.exists("o-r-1-demo.tfplan").await.unwrap());
+
+    // Without plan storage the plan produced before the apply decides.
+    let ctx = run_ctx(&tmp, &config, Arc::new(NoopPlanStorage), None);
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    match result.outcome {
+        Ok(Outcome::ApplyNoChanges(Some(p))) => assert!(p.is_empty()),
+        other => panic!("expected skipped apply with its plan: {:?}", other),
+    }
 }
 
 #[tokio::test]

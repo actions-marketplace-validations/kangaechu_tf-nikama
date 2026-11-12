@@ -18,6 +18,11 @@ pub const HEAD_SHA_METADATA_KEY: &str = "head-sha";
 /// array.
 pub const PLAN_ARGS_METADATA_KEY: &str = "plan-args";
 
+/// Name of the object metadata entry set to `"true"` when the plan has no
+/// changes (`x-amz-meta-plan-no-changes` on S3); `apply` then skips the
+/// project instead of applying an empty plan.
+pub const PLAN_NO_CHANGES_METADATA_KEY: &str = "plan-no-changes";
+
 /// What is recorded next to a plan file.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PlanMeta {
@@ -25,6 +30,8 @@ pub struct PlanMeta {
     pub head_sha: Option<String>,
     /// Arguments given after `--` on the comment that produced the plan.
     pub extra_args: Vec<String>,
+    /// The plan has no changes.
+    pub no_changes: bool,
 }
 
 impl PlanMeta {
@@ -37,8 +44,18 @@ impl PlanMeta {
         if !self.extra_args.is_empty() {
             out.push((PLAN_ARGS_METADATA_KEY, encode_args(&self.extra_args)));
         }
+        if self.no_changes {
+            out.push((PLAN_NO_CHANGES_METADATA_KEY, "true".to_string()));
+        }
         out
     }
+}
+
+/// Decode the `no-changes` metadata entry; anything but `true` (including
+/// a missing entry, as written by older versions) means the plan must be
+/// applied.
+pub fn decode_no_changes(value: Option<&str>) -> bool {
+    value.is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
 }
 
 /// Encode comment arguments for object metadata: JSON with every non-ASCII
@@ -77,6 +94,9 @@ pub struct StoredPlan {
     /// Comment arguments the plan was produced with (empty when none or
     /// when written by an older version).
     pub extra_args: Vec<String>,
+    /// The plan has no changes, so there is nothing to apply (`false` when
+    /// written by an older version, which then applies as before).
+    pub no_changes: bool,
 }
 
 #[async_trait]
@@ -197,6 +217,7 @@ mod meta_tests {
         let meta = PlanMeta {
             head_sha: Some("abc".into()),
             extra_args: vec!["-refresh=false".into()],
+            no_changes: false,
         };
         assert_eq!(
             meta.to_metadata(),
@@ -206,5 +227,22 @@ mod meta_tests {
             ]
         );
         assert!(PlanMeta::default().to_metadata().is_empty());
+    }
+
+    #[test]
+    fn no_changes_round_trip() {
+        let meta = PlanMeta {
+            no_changes: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            meta.to_metadata(),
+            vec![(PLAN_NO_CHANGES_METADATA_KEY, "true".to_string())]
+        );
+        assert!(decode_no_changes(Some("true")));
+        assert!(decode_no_changes(Some("TRUE")));
+        assert!(!decode_no_changes(Some("false")));
+        assert!(!decode_no_changes(Some("")));
+        assert!(!decode_no_changes(None));
     }
 }

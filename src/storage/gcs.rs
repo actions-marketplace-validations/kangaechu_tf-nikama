@@ -1,7 +1,8 @@
 //! Google Cloud Storage plan storage.
 
 use super::{
-    decode_args, PlanMeta, PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY, PLAN_ARGS_METADATA_KEY,
+    decode_args, decode_no_changes, PlanMeta, PlanStorage, StoredPlan, HEAD_SHA_METADATA_KEY,
+    PLAN_ARGS_METADATA_KEY, PLAN_NO_CHANGES_METADATA_KEY,
 };
 use crate::gcs::GcsClient;
 use async_trait::async_trait;
@@ -58,10 +59,16 @@ impl PlanStorage for GcsPlanStorage {
                 .and_then(|i| i.metadata.get(PLAN_ARGS_METADATA_KEY))
                 .map(String::as_str),
         );
+        let no_changes = decode_no_changes(
+            info.as_ref()
+                .and_then(|i| i.metadata.get(PLAN_NO_CHANGES_METADATA_KEY))
+                .map(String::as_str),
+        );
         Ok(Some(StoredPlan {
             bytes,
             head_sha,
             extra_args,
+            no_changes,
         }))
     }
 

@@ -67,6 +67,10 @@ compatibility).
    blind), otherwise a plan produced immediately before the apply, whose
    summary is shown in the comment. Stored plans record the PR head commit
    they were produced from; a plan from a different commit is refused.
+   A plan without changes is not applied: the project is reported as
+   *no changes* and Terraform is not run for it (a stored plan remembers
+   whether it was empty, so no `init` is needed to find out). Such a project
+   still counts as applied for `auto_merge`.
    When an apply fails, `dependency_configuration.on_failure` decides what
    happens to the rest (default `skip_dependents`): projects that depend on
    the failed one, directly or transitively, are reported as *skipped* with
