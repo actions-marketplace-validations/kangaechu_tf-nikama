@@ -421,9 +421,18 @@ fn convert_workflow(
         ),
     ] {
         for c in cmds {
-            if crate::engine::Command::parse_with(c, wakeup_words).is_none() {
+            let parsed = crate::engine::Command::parse_with(c, wakeup_words);
+            if parsed.is_none() {
                 return Err(ConfigError::Validation(format!(
                     "workflow '{}': workflow_configuration.{} contains unknown command '{}'",
+                    name, field, c
+                )));
+            }
+            // `destroy` bypasses apply_requirements and is refused from PR
+            // comments as well; it belongs in a manually dispatched run.
+            if parsed == Some(crate::engine::Command::Destroy) {
+                return Err(ConfigError::Validation(format!(
+                    "workflow '{}': workflow_configuration.{} cannot run '{}'; use a manually dispatched workflow with mode: manual",
                     name, field, c
                 )));
             }

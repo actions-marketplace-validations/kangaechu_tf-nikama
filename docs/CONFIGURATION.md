@@ -84,7 +84,12 @@ compatibility).
    sets both `digger/plan` and `digger/apply` to success, and a plan run in
    which no project has changes also sets `digger/apply` to success, so
    either can be used as a required check without blocking PRs that have
-   nothing to apply.
+   nothing to apply. Both are statements about the whole commit, so a run
+   that covers only part of the impacted projects (`-p` / `-d`, or a plan
+   restricted with arguments after `--`) never sets them to success: an
+   apply of a subset leaves `digger/apply` pending. When a pull request does
+   impact projects but an event runs nothing for them, both contexts are left
+   as they are rather than being set to success.
 
 ## Draft pull requests
 
@@ -104,7 +109,9 @@ order. If any project is held by another open PR, no new lock is taken: the
 held projects are reported as *locked by #N*, the others as skipped, and only
 projects this PR already holds still run. On close / merge and on a bare
 `digger unlock`, every lock the PR still holds is released, not only those of
-the currently impacted projects.
+the currently impacted projects. A lock held by a different open pull request
+is never released this way; a lock left behind by a closed pull request is
+taken over by the next PR that needs the project.
 
 `pr_locks` decides when a lock is taken:
 

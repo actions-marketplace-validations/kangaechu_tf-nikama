@@ -232,8 +232,11 @@ impl IacRunner {
         cmd.args(args)
             .current_dir(&self.working_dir)
             .env("TF_IN_AUTOMATION", "true")
-            .envs(&self.base_env)
+            // Configuration-supplied variables go first: what nikama sets
+            // itself (TF_CLI_CONFIG_FILE for the provider allowlist,
+            // TF_DATA_DIR) must not be overridable from nikama.yml.
             .envs(env)
+            .envs(&self.base_env)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

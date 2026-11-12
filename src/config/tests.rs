@@ -129,6 +129,13 @@ fn workflow_configuration_fills_missing_keys() {
 }
 
 #[test]
+fn workflow_configuration_rejects_destroy() {
+    let r = load("projects: []\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"digger destroy\"]\n");
+    let err = format!("{}", r.unwrap_err());
+    assert!(err.contains("cannot run 'digger destroy'"), "{}", err);
+}
+
+#[test]
 fn workflow_configuration_rejects_unknown_commands() {
     let r = load("projects: []\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"digger noop\"]\n");
     assert!(err_msg(r).contains("unknown command 'digger noop'"));

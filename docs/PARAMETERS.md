@@ -142,11 +142,11 @@ A workflow may be `null` to use the built-in steps (`plan` = `init`, `plan`;
 | Key | Default | Description |
 |---|---|---|
 | `env_vars.state[]` | `[]` | Environment variables for `init` (the state backend). Each entry: `name` plus `value` or `value_from` (name of a workflow environment variable). |
-| `env_vars.commands[]` | `[]` | Environment variables for `plan` / `apply` / `run` steps; same shape. |
+| `env_vars.commands[]` | `[]` | Environment variables for `plan` / `apply` / `run` steps; same shape. Variables nikama sets itself (`TF_CLI_CONFIG_FILE` for `allowed-providers`, `TF_DATA_DIR`) win over entries with the same name. |
 | `plan.steps[]` | `[init, plan]` | Steps of the plan stage; see below. |
 | `plan.filter_regex`, `apply.filter_regex` | none | Regular expression; matches in the stage output are replaced with `<REDACTED>` in logs and the comment. |
 | `apply.steps[]` | `[init, apply]` | Steps of the apply stage. |
-| `workflow_configuration.on_pull_request_pushed` | `[digger plan]` | Commands run on push. |
+| `workflow_configuration.on_pull_request_pushed` | `[digger plan]` | Commands run on push. `destroy` is refused here, as it is in comments. |
 | `workflow_configuration.on_pull_request_closed` | `[digger unlock]` | Commands run on close or merge. |
 | `workflow_configuration.on_commit_to_default` | `[digger unlock]` | Commands run on a commit to the default branch. |
 | `workflow_configuration.on_pull_request_to_draft` | `[]` | Commands run when a pull request is converted to a draft. |
