@@ -347,6 +347,21 @@ fn blocked_pr_is_denied_for_reviews_and_required_checks() {
     assert!(check_blocked(&own_job, None).is_err());
     assert!(check_blocked(&own_job, Some("777")).is_ok());
     assert!(check_blocked(&own_job, Some("778")).is_err());
+
+    // Another job of the same workflow run that has already failed is a
+    // real blocker: only unfinished ones are treated as "us".
+    let sibling = MergeRequirements {
+        review_decision: None,
+        contexts: vec![ctx(
+            "policy",
+            CheckKind::CheckRun,
+            true,
+            "failure",
+            "https://github.com/o/r/actions/runs/777/job/9",
+        )],
+    };
+    let err = check_blocked(&sibling, Some("777")).unwrap_err();
+    assert!(err.contains("policy (failure)"), "{}", err);
 }
 
 fn plan_result(empty: bool) -> JobResult {
@@ -698,7 +713,10 @@ async fn apply_skips_stored_plan_without_changes() {
     let ctx = run_ctx(&tmp, &config, storage.clone(), Some("abc"));
     let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
     assert!(
-        matches!(result.outcome, Ok(Outcome::ApplyNoChanges(None))),
+        matches!(
+            result.outcome,
+            Ok(Outcome::ApplyNoChanges { plan: None, .. })
+        ),
         "{:?}",
         result.outcome
     );
@@ -771,6 +789,34 @@ async fn plan_stores_head_sha_with_the_plan_file() {
 }
 
 #[tokio::test]
+async fn a_targeted_stored_plan_without_changes_is_not_a_full_apply() {
+    let (tmp, config) = demo_fixture(true);
+    let storage = Arc::new(MemoryStorage::default());
+    storage
+        .store(
+            "o-r-1-demo.tfplan",
+            b"stored",
+            &crate::storage::PlanMeta {
+                head_sha: Some("head-123".into()),
+                extra_args: vec!["-target=module.x".into()],
+                no_changes: true,
+            },
+        )
+        .await
+        .unwrap();
+    let ctx = run_ctx(&tmp, &config, storage.clone(), Some("head-123"));
+    let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
+    assert!(
+        matches!(
+            result.outcome,
+            Ok(Outcome::ApplyNoChanges { targeted: true, .. })
+        ),
+        "{:?}",
+        result.outcome
+    );
+}
+
+#[tokio::test]
 async fn plan_without_changes_is_flagged_and_apply_skips_it() {
     if std::process::Command::new("terraform")
         .arg("version")
@@ -804,7 +850,10 @@ async fn plan_without_changes_is_flagged_and_apply_skips_it() {
 
     let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
     assert!(
-        matches!(result.outcome, Ok(Outcome::ApplyNoChanges(None))),
+        matches!(
+            result.outcome,
+            Ok(Outcome::ApplyNoChanges { plan: None, .. })
+        ),
         "{:?}",
         result.outcome
     );
@@ -814,7 +863,7 @@ async fn plan_without_changes_is_flagged_and_apply_skips_it() {
     let ctx = run_ctx(&tmp, &config, Arc::new(NoopPlanStorage), None);
     let result = super::run::run_job(&ctx, demo_apply_job(&config)).await;
     match result.outcome {
-        Ok(Outcome::ApplyNoChanges(Some(p))) => assert!(p.is_empty()),
+        Ok(Outcome::ApplyNoChanges { plan: Some(p), .. }) => assert!(p.is_empty()),
         other => panic!("expected skipped apply with its plan: {:?}", other),
     }
 }

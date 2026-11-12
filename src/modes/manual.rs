@@ -93,7 +93,7 @@ pub async fn run(env: &Env, config: Arc<Config>, actor: &str, namespace: &str) -
             println!("\n==== {}: {} ====\n{}\n", command, project_name, a.output);
             exit::OK
         }
-        Ok(Outcome::ApplyNoChanges(pre_plan)) => {
+        Ok(Outcome::ApplyNoChanges { plan: pre_plan, .. }) => {
             if let Some(p) = &pre_plan {
                 println!(
                     "\n==== plan before apply: {} ({}) ====\n{}\n",
