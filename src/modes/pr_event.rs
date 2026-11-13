@@ -46,16 +46,20 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     };
     if trigger.jobs.is_empty() {
         tracing::info!("no jobs to run");
-        if trigger.expects_plan_or_apply {
-            // A required `digger/plan` or `digger/apply` check must not stay
-            // missing (or keep an older failure) just because this commit
-            // changes no infrastructure.
-            let description = if trigger.impacted == 0 {
-                "no impacted projects"
-            } else {
-                "nothing to run for this event"
-            };
-            set_noop_statuses(&github, &trigger.head_sha, description, &ctx.run_url()).await;
+        // A required `digger/plan` or `digger/apply` check must not stay
+        // missing (or keep an older failure) just because this commit
+        // changes no infrastructure. When projects *are* impacted and this
+        // event merely ran nothing for them (a selector matching none of
+        // them, for instance), the checks are left as they are: nothing was
+        // planned or applied, so nothing may report success.
+        if trigger.expects_plan_or_apply && trigger.impacted == 0 {
+            set_noop_statuses(
+                &github,
+                &trigger.head_sha,
+                "no impacted projects",
+                &ctx.run_url(),
+            )
+            .await;
         }
         let mut notes = trigger.notes.clone();
         if trigger.release_all_locks {
@@ -199,7 +203,9 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     let runnable = plan.runnable;
 
     // Apply preconditions.
-    let has_apply = runnable.iter().any(|j| matches!(j.command, Command::Apply));
+    let has_apply = runnable
+        .iter()
+        .any(|j| matches!(j.command, Command::Apply | Command::Destroy));
     if has_apply {
         if let Err(reason) = apply_allowed(&github, &pr, &runnable).await {
             tracing::error!(%reason, "apply not allowed");
@@ -309,15 +315,31 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         .filter(|r| {
             matches!(
                 r.outcome,
-                Ok(Outcome::Apply(_)) | Ok(Outcome::ApplyNoChanges(_))
+                Ok(Outcome::Apply(_))
+                    | Ok(Outcome::ApplyNoChanges {
+                        targeted: false,
+                        ..
+                    })
             )
         })
         .count();
-    let description = summarize(&results, lock_failed);
+    // `digger/apply` is a statement about the commit as a whole, so a run
+    // that applied only some of the impacted projects (`-p` / `-d`) leaves
+    // it pending rather than passing.
+    let partial_apply = main_command == Command::Apply && !trigger.covers_all_impacted;
+    let mut description = summarize(&results, lock_failed);
+    let state = if failed {
+        "failure"
+    } else if partial_apply {
+        description.push_str("; some impacted projects were not applied");
+        "pending"
+    } else {
+        "success"
+    };
     let _ = github
         .set_status(
             &pr.head_sha,
-            if failed { "failure" } else { "success" },
+            state,
             status_context,
             &description,
             Some(&ctx.run_url()),
@@ -327,7 +349,11 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
     // Nothing to apply: let a required `digger/apply` check pass. When any
     // project has changes the apply context is left untouched, so it stays
     // missing on this commit until an apply runs.
-    if main_command == Command::Plan && trigger.covers_all_impacted && all_plans_empty(&results) {
+    if main_command == Command::Plan
+        && trigger.covers_all_impacted
+        && trigger.extra_args.is_empty()
+        && all_plans_empty(&results)
+    {
         let _ = github
             .set_status(
                 &pr.head_sha,
@@ -1126,9 +1152,16 @@ pub(super) fn check_blocked(
         .filter(|c| c.required)
         .filter(|c| !(c.name.starts_with("digger/") || c.name.starts_with("nikama/")))
         .filter(|c| {
-            !own_run
+            // Our own job (and anything waiting on it) is still running in
+            // this workflow run and would block the apply for ever. A job
+            // of this run that has already failed is a real blocker.
+            !(own_run
                 .as_ref()
                 .is_some_and(|r| c.details_url.contains(r.as_str()))
+                && matches!(
+                    c.state.as_str(),
+                    "pending" | "queued" | "waiting" | "in_progress" | "expected"
+                ))
         })
         .filter(|c| !matches!(c.state.as_str(), "success" | "neutral" | "skipped"))
         .map(|c| format!("{} ({})", c.name, c.state))

@@ -195,6 +195,7 @@ impl<'a> JobExecutor<'a> {
         command: &str,
         shell: Option<&str>,
         plan_file: Option<&Path>,
+        filter: Option<regex::Regex>,
     ) -> Result<CmdOutput, ExecError> {
         let script = self.work_dir.join(format!("run-step-{}.sh", uuid_like()));
         std::fs::write(&script, format!("{}\n", command)).map_err(|e| io_err("run", e))?;
@@ -220,7 +221,7 @@ impl<'a> JobExecutor<'a> {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         tracing::info!(target: "nikama::exec", "[{}] $ {}", self.job.project.name, command);
-        let out = run_streaming(cmd, &format!("[{}]", self.job.project.name), None, true)
+        let out = run_streaming(cmd, &format!("[{}]", self.job.project.name), filter, true)
             .await
             .map_err(|e| io_err("run", e))?;
         let _ = std::fs::remove_file(&script);
@@ -235,16 +236,20 @@ impl<'a> JobExecutor<'a> {
         Ok(out)
     }
 
-    fn take_additional_output(&self) -> Option<String> {
+    fn take_additional_output(&self, filter: Option<&regex::Regex>) -> Option<String> {
         let p = self.additional_output_file();
         let content = std::fs::read_to_string(&p).ok()?;
         let _ = std::fs::remove_file(&p);
         let trimmed = content.trim();
         if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
+            return None;
         }
+        // The file is written by `run:` steps, so it gets the same redaction
+        // as the rest of the stage output before it reaches the comment.
+        Some(match filter {
+            Some(re) => re.replace_all(trimmed, "<REDACTED>").into_owned(),
+            None => trimmed.to_string(),
+        })
     }
 
     /// Run the plan stage. Returns the plan even when it is empty.
@@ -288,7 +293,9 @@ impl<'a> JobExecutor<'a> {
                     } else {
                         None
                     };
-                    let out = self.run_shell(command, shell.as_deref(), pf).await?;
+                    let out = self
+                        .run_shell(command, shell.as_deref(), pf, runner.filter.clone())
+                        .await?;
                     steps.push(log("run", &out));
                 }
             }
@@ -342,7 +349,7 @@ impl<'a> JobExecutor<'a> {
             plan_text,
             plan_json: show.stdout,
             plan_file,
-            additional_output: self.take_additional_output(),
+            additional_output: self.take_additional_output(runner.filter.as_ref()),
             steps,
         })
     }
@@ -382,7 +389,9 @@ impl<'a> JobExecutor<'a> {
                     tracing::warn!("ignoring 'plan' step inside apply stage");
                 }
                 Step::Run { command, shell } => {
-                    let out = self.run_shell(command, shell.as_deref(), plan_file).await?;
+                    let out = self
+                        .run_shell(command, shell.as_deref(), plan_file, runner.filter.clone())
+                        .await?;
                     steps.push(log("run", &out));
                 }
             }
@@ -390,7 +399,7 @@ impl<'a> JobExecutor<'a> {
         Ok(ApplyResult {
             output,
             summary,
-            additional_output: self.take_additional_output(),
+            additional_output: self.take_additional_output(runner.filter.as_ref()),
             steps,
             pre_plan: None,
         })
@@ -423,7 +432,7 @@ impl<'a> JobExecutor<'a> {
         Ok(ApplyResult {
             summary: apply_summary_from_output(&out.stdout),
             output: cleanup_apply_output(&out.stdout),
-            additional_output: self.take_additional_output(),
+            additional_output: self.take_additional_output(runner.filter.as_ref()),
             steps,
             pre_plan: None,
         })

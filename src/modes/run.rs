@@ -69,7 +69,13 @@ pub enum Outcome {
     /// An apply job whose plan had no changes: Terraform was not run. The
     /// plan is carried along when it was produced right before (no plan
     /// storage); with a stored plan only its "no changes" flag is known.
-    ApplyNoChanges(Option<PlanResult>),
+    ApplyNoChanges {
+        plan: Option<PlanResult>,
+        /// The plan was produced with comment arguments such as `-target`,
+        /// so "no changes" describes only the part that was planned and
+        /// says nothing about the rest of the project.
+        targeted: bool,
+    },
     Destroy(ApplyResult),
     Locked,
     Unlocked(bool),
@@ -160,7 +166,7 @@ pub async fn run_job(ctx: &RunContext, mut job: Job) -> JobResult {
                 }
             });
         }
-        Ok(Outcome::ApplyNoChanges(pre_plan)) => {
+        Ok(Outcome::ApplyNoChanges { plan: pre_plan, .. }) => {
             let pre_plan = pre_plan.clone();
             ctx.update(move |r| {
                 let row = r.row_mut(&n);
@@ -280,10 +286,14 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
         Command::Unlock => {
             let mut released = false;
             if let Some(locker) = &ctx.locker {
-                released = locker
-                    .force_unlock(&job.lock_id())
-                    .await
-                    .map_err(|e| e.to_string())?;
+                released = match job.pr_number {
+                    // A lock held by another open pull request is not ours
+                    // to drop: unlock releases only what this PR holds.
+                    Some(pr) => locker.unlock(pr, &job.lock_id()).await,
+                    // Manual mode: an operator asking for a forced release.
+                    None => locker.force_unlock(&job.lock_id()).await,
+                }
+                .map_err(|e| e.to_string())?;
             }
             if let Err(e) = ctx.storage.delete(&job.plan_file_name()).await {
                 tracing::warn!(error = %e, "failed to delete stored plan");
@@ -337,7 +347,10 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                 let plan = exec.plan().await.map_err(|e| format_exec_error(&e))?;
                 if plan.is_empty() {
                     tracing::info!(project = %job.project.name, "plan has no changes; skipping apply");
-                    return Ok(Outcome::ApplyNoChanges(Some(plan)));
+                    return Ok(Outcome::ApplyNoChanges {
+                        plan: Some(plan),
+                        targeted: !job.extra_args.is_empty(),
+                    });
                 }
                 (plan.plan_file.clone(), Some(plan))
             } else {
@@ -370,8 +383,21 @@ async fn run_job_inner(ctx: &RunContext, job: &mut Job) -> Result<Outcome, Strin
                         }
                         if stored.no_changes {
                             tracing::info!(project = %job.project.name, "stored plan has no changes; skipping apply");
+                            let targeted = !stored.extra_args.is_empty();
                             let _ = ctx.storage.delete(&job.plan_file_name()).await;
-                            return Ok(Outcome::ApplyNoChanges(None));
+                            if targeted {
+                                let n = job.project.name.clone();
+                                ctx.update(move |r| {
+                                    r.notes.push(format!(
+                                        "{}: the stored plan was produced with extra arguments and has no changes, so the project is not fully applied",
+                                        n
+                                    ))
+                                });
+                            }
+                            return Ok(Outcome::ApplyNoChanges {
+                                plan: None,
+                                targeted,
+                            });
                         }
                         let p = exec.plan_file();
                         std::fs::write(&p, stored.bytes).map_err(|e| e.to_string())?;

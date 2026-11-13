@@ -140,12 +140,12 @@
 
 | キー | デフォルト | 説明 |
 |---|---|---|
-| `env_vars.state[]` | `[]` | `init`（state バックエンド）用の環境変数。各要素は `name` と、`value` または `value_from`（ワークフローの環境変数名）。 |
+| `env_vars.state[]` | `[]` | `init`（state バックエンド）用の環境変数。各要素は `name` と、`value` または `value_from`（ワークフローの環境変数名）。nikama 自身が設定する変数（`allowed-providers` 用の `TF_CLI_CONFIG_FILE`、`TF_DATA_DIR`）が同名の指定より優先されます。 |
 | `env_vars.commands[]` | `[]` | `plan` / `apply` / `run` ステップ用の環境変数。形式は同じ。 |
 | `plan.steps[]` | `[init, plan]` | plan ステージのステップ。後述。 |
 | `plan.filter_regex`、`apply.filter_regex` | なし | 正規表現。ステージ出力の一致箇所はログとコメントで `<REDACTED>` に置き換えられます。 |
 | `apply.steps[]` | `[init, apply]` | apply ステージのステップ。 |
-| `workflow_configuration.on_pull_request_pushed` | `[digger plan]` | push 時に実行するコマンド。 |
+| `workflow_configuration.on_pull_request_pushed` | `[digger plan]` | push 時に実行するコマンド。コメントと同様に `destroy` は拒否されます。 |
 | `workflow_configuration.on_pull_request_closed` | `[digger unlock]` | クローズまたはマージ時に実行するコマンド。 |
 | `workflow_configuration.on_commit_to_default` | `[digger unlock]` | デフォルトブランチへのコミット時に実行するコマンド。 |
 | `workflow_configuration.on_pull_request_to_draft` | `[]` | プルリクエストがドラフトに変換されたときに実行するコマンド。 |
