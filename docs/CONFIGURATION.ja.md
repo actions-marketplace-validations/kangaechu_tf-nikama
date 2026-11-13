@@ -113,6 +113,7 @@ PR ロックは全プロジェクト分を事前に確認し、設定順に取�
 
 - `on_plan`（デフォルト、`true` も同じ）は最初の plan 時にロックし、1 つの
   プルリクエストが最初の plan からクローズまたはマージまでプロジェクトを保持します。
+  変更のない plan は apply するものがないため、run の最後にロックを返します。
 - `on_apply` はすべてのプルリクエストが自由に plan でき、`apply` 時にだけロック
   します。その後はクローズ／マージまたは `unlock` までプロジェクトを保持します
   （同じ PR の以降の plan はロックを維持します）。`on_apply` を使う場合は、別の
@@ -283,7 +284,7 @@ nikama が作成するため、ロールにはテーブルに対する `dynamodb
 オンデマンドキャパシティでテーブルを事前に作成してください。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -298,7 +299,7 @@ nikama が作成するため、ロールにはテーブルに対する `dynamodb
 ロックバケットは plan バケットと兼用できます。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           lock-provider: s3
           aws-lock-bucket: my-lock-bucket
@@ -318,7 +319,7 @@ Cloud Storage のバケットにします。サービスアカウントには両
         with:
           workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
           service_account: nikama@my-project.iam.gserviceaccount.com
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           lock-provider: gcp
           google-lock-bucket: my-lock-bucket
@@ -373,7 +374,7 @@ Cloud Storage のバケットにします。サービスアカウントには両
           private-key: ${{ secrets.NIKAMA_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
         # ...
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           # ...
@@ -423,7 +424,7 @@ README のクイックスタートの `if:` ガードは、リポジトリ外か
   含むものを拒否します。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           config-ref: default
           allow-run-steps: "false"
@@ -437,7 +438,7 @@ README のクイックスタートの `if:` ガードは、リポジトリ外か
 インストールできるものを制限します:
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           allowed-providers: "hashicorp/aws, hashicorp/random, app.terraform.io/myorg/*"
 ```

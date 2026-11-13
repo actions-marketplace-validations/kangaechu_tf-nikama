@@ -2,8 +2,8 @@
 
 use super::pr_event::{
     acquire_locks, all_plans_empty, apply_gate, check_approved, check_blocked, check_undiverged,
-    closed_pr_rejection, draft_pr_rejection, no_lock_reason, required_checks, set_noop_statuses,
-    summarize, sweep_locks, ApplyGate, PlanLocking,
+    closed_pr_rejection, draft_pr_rejection, no_lock_reason, release_no_change_locks,
+    required_checks, set_noop_statuses, summarize, sweep_locks, ApplyGate, PlanLocking,
 };
 use super::run::{run_by_levels, JobResult, Outcome, RunContext};
 use crate::config::load_from_str;
@@ -1458,6 +1458,67 @@ async fn no_lock_plan_takes_nothing_and_runs_despite_other_holders() {
     assert_eq!(mem.holder("o/r#a").await.unwrap(), None);
     assert_eq!(mem.holder("o/r#b").await.unwrap(), Some(2));
     assert_eq!(mem.holder("o/r#c").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn locks_taken_in_this_run_are_recorded() {
+    let server = MockServer::start().await;
+    // a: held by this PR from an earlier run, b and c: free.
+    let mem = Arc::new(MemLock::holding(&[("o/r#a", 1)]));
+    let locker = pr_locker(&server, mem.clone());
+    let plan = acquire_locks(&locker, 1, abc_jobs(Command::Plan), PlanLocking::Take).await;
+    assert!(!plan.failed);
+    assert_eq!(
+        plan.taken,
+        vec![
+            ("b".to_string(), "o/r#b".to_string()),
+            ("c".to_string(), "o/r#c".to_string())
+        ]
+    );
+}
+
+#[tokio::test]
+async fn no_change_plans_release_only_locks_taken_in_this_run() {
+    let server = MockServer::start().await;
+    // a: held from an earlier run (maybe an apply), b and c: taken now.
+    let mem = Arc::new(MemLock::holding(&[
+        ("o/r#a", 1),
+        ("o/r#b", 1),
+        ("o/r#c", 1),
+    ]));
+    let locker = pr_locker(&server, mem.clone());
+    let taken = vec![
+        ("b".to_string(), "o/r#b".to_string()),
+        ("c".to_string(), "o/r#c".to_string()),
+    ];
+    let result = |project: &str, empty: bool| {
+        let mut r = plan_result(empty);
+        r.project = project.into();
+        r
+    };
+    // a and b: no changes; c: changes.
+    let results = vec![result("a", true), result("b", true), result("c", false)];
+    let released = release_no_change_locks(&locker, 1, &results, &taken).await;
+    assert_eq!(released, vec!["b".to_string()]);
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
+    assert_eq!(mem.holder("o/r#b").await.unwrap(), None);
+    assert_eq!(mem.holder("o/r#c").await.unwrap(), Some(1));
+}
+
+#[tokio::test]
+async fn failed_plans_keep_their_lock() {
+    let server = MockServer::start().await;
+    let mem = Arc::new(MemLock::holding(&[("o/r#a", 1)]));
+    let locker = pr_locker(&server, mem.clone());
+    let taken = vec![("a".to_string(), "o/r#a".to_string())];
+    let results = vec![JobResult {
+        project: "a".into(),
+        command: Command::Plan,
+        outcome: Err("boom".into()),
+    }];
+    let released = release_no_change_locks(&locker, 1, &results, &taken).await;
+    assert!(released.is_empty());
+    assert_eq!(mem.holder("o/r#a").await.unwrap(), Some(1));
 }
 
 #[tokio::test]

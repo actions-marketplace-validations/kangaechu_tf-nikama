@@ -29,7 +29,7 @@ All inputs of `kangaechu/tf-nikama` are optional.
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | the action ref | Release tag to install (for example `v0.5.0`). A non-release ref builds from source with cargo. |
+| `version` | the action ref | Release tag to install (for example `v0.6.0`). A non-release ref builds from source with cargo. |
 | `mode` | `` | Empty for pull request events, `manual` for `workflow_dispatch`, `drift-detection` for scheduled drift runs. |
 | `command` | `` | Manual mode only: `digger plan`, `digger apply` or `digger destroy`. |
 | `project` | `` | Manual mode only: the project to run. |
@@ -99,7 +99,7 @@ Unknown keys are errors. The file is read from the checkout unless
 | `traverse_to_nested_projects` | `true` | Whether `generate_projects` descends into a directory that is itself a project. |
 | `auto_merge` | `false` | Merge the pull request when every apply succeeded. |
 | `auto_merge_strategy` | `squash` | `squash`, `merge` or `rebase`. |
-| `pr_locks` | `on_plan` | `on_plan` / `true`: lock on the first plan. `on_apply`: lock only on apply. `disabled` / `false`: never lock. |
+| `pr_locks` | `on_plan` | `on_plan` / `true`: lock on the first plan with changes (a plan without changes gives the lock back). `on_apply`: lock only on apply. `disabled` / `false`: never lock. |
 | `allow_draft_prs` | `false` | `false`: draft pull requests run nothing and hold no locks. |
 | `no_lock_label` | none | Pull requests carrying this label plan without taking locks. |
 | `wakeup_word` | `[nikama, digger]` | Word or list of words a comment command starts with; replaces the defaults. |
