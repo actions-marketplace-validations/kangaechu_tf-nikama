@@ -98,7 +98,7 @@
 | `traverse_to_nested_projects` | `true` | `generate_projects` が、それ自体がプロジェクトであるディレクトリの中まで探索するかどうか。 |
 | `auto_merge` | `false` | すべての apply が成功したらプルリクエストをマージします。 |
 | `auto_merge_strategy` | `squash` | `squash`、`merge`、`rebase`。 |
-| `pr_locks` | `on_plan` | `on_plan` / `true`: 最初の plan でロック。`on_apply`: apply でのみロック。`disabled` / `false`: ロックしない。 |
+| `pr_locks` | `on_plan` | `on_plan` / `true`: 変更のある最初の plan でロック（変更のない plan はロックを返す）。`on_apply`: apply でのみロック。`disabled` / `false`: ロックしない。 |
 | `allow_draft_prs` | `false` | `false` の場合、ドラフトのプルリクエストは何も実行せず、ロックも持ちません。 |
 | `no_lock_label` | なし | このラベルが付いたプルリクエストは、ロックを取らずに plan します。 |
 | `wakeup_word` | `[nikama, digger]` | コメントコマンドの先頭の単語（文字列またはリスト）。デフォルトを置き換えます。 |
