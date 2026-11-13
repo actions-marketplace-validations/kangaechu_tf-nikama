@@ -281,6 +281,19 @@ pub async fn run(env: &Env, config: Arc<Config>, ctx: &GithubContext, github: Gi
         );
     }
 
+    // A plan without changes needs no lock: give back what this run took.
+    if plan_locking == PlanLocking::Take {
+        let released =
+            release_no_change_locks(&locker, trigger.pr_number, &results, &plan.taken).await;
+        if !released.is_empty() {
+            let notes: Vec<String> = released
+                .iter()
+                .map(|p| format!("released lock of `{}` (plan has no changes)", p))
+                .collect();
+            writer.update(move |r| r.notes.extend(notes));
+        }
+    }
+
     if trigger.release_all_locks {
         match sweep_locks(
             &locker,
@@ -668,6 +681,9 @@ pub(super) struct LockPlan {
     pub failed: bool,
     /// Projects whose lock this PR held and gave up for a no-lock plan.
     pub released: Vec<String>,
+    /// `(project, resource)` of the locks taken in this run, as opposed to
+    /// locks this PR already held from an earlier run.
+    pub taken: Vec<(String, String)>,
 }
 
 /// How `plan` jobs treat project locks in [`acquire_locks`].
@@ -725,6 +741,7 @@ pub(super) async fn acquire_locks(
         rows: Vec::new(),
         failed: false,
         released: Vec::new(),
+        taken: Vec::new(),
     };
 
     // Phase 1: look, do not touch.
@@ -879,8 +896,49 @@ pub(super) async fn acquire_locks(
                 )),
             }
         }
+    } else {
+        plan.taken = acquired_now
+            .into_iter()
+            .map(|(idx, resource)| (plan.runnable[idx].project.name.clone(), resource))
+            .collect();
     }
     plan
+}
+
+/// Give back the locks taken in this run for plans that found no changes.
+///
+/// A project whose plan is empty has nothing for this PR to apply, so holding
+/// it would only block other pull requests. Only locks from `taken` are
+/// released: a lock this PR already held may come from an earlier apply, and
+/// that one must stay until close / merge so nobody applies over the PR.
+/// Returns the released project names.
+pub(super) async fn release_no_change_locks(
+    locker: &PrLocker,
+    pr: u64,
+    results: &[JobResult],
+    taken: &[(String, String)],
+) -> Vec<String> {
+    let mut released = Vec::new();
+    for r in results {
+        let empty = matches!(&r.outcome, Ok(Outcome::Plan(p)) if p.is_empty());
+        if !empty {
+            continue;
+        }
+        let Some((_, resource)) = taken.iter().find(|(p, _)| *p == r.project) else {
+            continue;
+        };
+        match locker.unlock(pr, resource).await {
+            Ok(true) => {
+                tracing::info!(project = %r.project, "released lock: plan has no changes");
+                released.push(r.project.clone());
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!(project = %r.project, error = %e, "could not release the lock of a plan without changes")
+            }
+        }
+    }
+    released
 }
 
 /// Release every lock under `namespace` held by `pr` except `keep`
