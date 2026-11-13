@@ -118,11 +118,7 @@ taken over by the next PR that needs the project.
 - `on_plan` (the default, also `true`) locks on the first plan, so one pull
   request holds a project from its first plan until it is closed or merged.
   A plan that finds no changes has nothing to apply and gives its lock back
-  at the end of the run, so a pull request that does not touch a project's
-  infrastructure blocks nobody; the next plan with changes takes the lock
-  again. Only a lock taken in that same run is released: one the PR already
-  held, for example from an earlier apply, stays until close / merge or
-  `unlock`.
+  at the end of the run.
 - `on_apply` lets every pull request plan freely and locks only on `apply`,
   which then holds the project until close / merge or `unlock` (later plans
   of the same PR keep it). With `on_apply`, add `undiverged` to
