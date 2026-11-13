@@ -136,7 +136,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::123456789012:role/nikama
           aws-region: ap-northeast-1
-      - uses: kangaechu/tf-nikama@v0.5.0
+      - uses: kangaechu/tf-nikama@v0.6.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
