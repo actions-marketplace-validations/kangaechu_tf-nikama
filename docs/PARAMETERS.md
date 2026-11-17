@@ -29,7 +29,7 @@ All inputs of `kangaechu/tf-nikama` are optional.
 
 | Input | Default | Description |
 |---|---|---|
-| `version` | the action ref | Release tag to install (for example `v0.6.0`). A non-release ref builds from source with cargo. |
+| `version` | the action ref | Release tag to install (for example `v0.8.0`). A non-release ref builds from source with cargo. |
 | `mode` | `` | Empty for pull request events, `manual` for `workflow_dispatch`, `drift-detection` for scheduled drift runs. |
 | `command` | `` | Manual mode only: `digger plan`, `digger apply` or `digger destroy`. |
 | `project` | `` | Manual mode only: the project to run. |
@@ -110,6 +110,7 @@ Unknown keys are errors. The file is read from the checkout unless
 | `drift_exclude_patterns` | `[]` | Projects whose `dir` matches are excluded from drift detection. |
 | `concurrency.max_parallel` | `4` | Concurrent plans. |
 | `concurrency.apply_parallelism` | `1` | Concurrent applies within one dependency level. |
+| `timezone` | `UTC` | IANA time zone for start times in PR reports, e.g. `Asia/Tokyo`. Handles daylight saving time; invalid names are rejected. |
 | `comment.mode` | `single` | `single`: one comment per run. `per_project`: one comment per project. `latest`: a single comment reused and overwritten by every run. |
 | `comment.show_empty_plans` | `table` | Projects without changes: `table` shows their row only, `hide` drops the row, `details` also includes their plan output. |
 | `comment.per_project_status` | `false` | Accepted for compatibility; not used. |

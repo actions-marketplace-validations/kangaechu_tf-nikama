@@ -8,7 +8,9 @@ variables and exit codes of the binary.
 For a flat list of every input, key and variable with its default, see
 [PARAMETERS.md](PARAMETERS.md).
 
+- [Outdated plan comments](#outdated-plan-comments)
 - [Configuration file](#configuration-file)
+- [Time zone](#time-zone)
 - [How a run works](#how-a-run-works)
 - [Draft pull requests](#draft-pull-requests)
 - [PR locks](#pr-locks)
@@ -27,6 +29,25 @@ For a flat list of every input, key and variable with its default, see
 - [Validating locally](#validating-locally)
 - [Exit codes](#exit-codes)
 
+## Outdated plan comments
+
+In `comment.mode: single` (the default) and `per_project`, a completed plan
+run collapses older plan comments as **outdated** after publishing its final
+report. Every project recorded in an older comment must have a successful
+replacement plan (`changes` or `no changes`) in the new run. A partial re-plan
+keeps comments that still contain results for other projects. Split comments
+are treated as one report scope; per-project comments can be hidden independently.
+
+Only older, completed nikama plan comments by the same GitHub account are
+eligible. Apply comments and running reports stay visible. `latest` continues
+to update its existing comment in place. Comments produced before scope
+metadata was introduced stay visible because their full project scope cannot
+be verified (empty plans may have been omitted from the table).
+
+Collapsing uses GitHub GraphQL `minimizeComment` with `OUTDATED`; comments
+remain available to expand. If the token cannot minimize a comment, nikama
+logs a warning and leaves the Terraform result unchanged.
+
 ## Configuration file
 
 `nikama.yml` (or `nikama.yaml`) at the repository root. A `digger.yml` is
@@ -37,10 +58,25 @@ for a complete example.
 Top-level keys: `projects`, `workflows`, `generate_projects`,
 `dependency_configuration`, `traverse_to_nested_projects`, `auto_merge`,
 `auto_merge_strategy`, `pr_locks`, `allow_draft_prs`, `no_lock_label`,
-`wakeup_word`, `autoplan_modules`, `allowed_plan_args`,
+`wakeup_word`, `autoplan_modules`, `allowed_plan_args`, `timezone`,
 `drift_include_patterns`, `drift_exclude_patterns`, `concurrency`, `comment`,
 `allowed_providers` (plus `git_timeout` and `telemetry`, accepted for
 compatibility).
+
+## Time zone
+
+Set `timezone` to an IANA time zone name to display the start time of PR
+reports (plan, apply and other commands) in your local time:
+
+```yaml
+timezone: Asia/Tokyo
+```
+
+For example, `2026-01-15 18:30 UTC` is displayed as `2026-01-16 03:30 JST`.
+The default is `UTC`. Invalid names fail configuration validation. Daylight
+saving time is handled automatically for regions that use it. This applies
+to all comment modes (`single`, `per_project`, `latest`). Lock timestamps and
+Terraform / OpenTofu output are unchanged.
 
 ## How a run works
 
@@ -292,7 +328,7 @@ rather not grant `CreateTable`, create the table yourself: partition key `PK`
 (string), sort key `SK` (string), on-demand capacity.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -307,7 +343,7 @@ take the same project. The role needs `s3:PutObject`, `s3:GetObject`,
 plan bucket.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           lock-provider: s3
           aws-lock-bucket: my-lock-bucket
@@ -327,7 +363,7 @@ compatible with Digger's `gcp` providers.
         with:
           workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
           service_account: nikama@my-project.iam.gserviceaccount.com
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           lock-provider: gcp
           google-lock-bucket: my-lock-bucket
@@ -382,7 +418,7 @@ put on the allow list:
           private-key: ${{ secrets.NIKAMA_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
         # ...
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           # ...
@@ -432,7 +468,7 @@ is the pull request's own version. Two inputs tighten that:
   step, from whichever source it was read.
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           config-ref: default
           allow-run-steps: "false"
@@ -446,7 +482,7 @@ runs code of its choosing with the job's credentials. `allowed-providers`
 limits what can be installed:
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           allowed-providers: "hashicorp/aws, hashicorp/random, app.terraform.io/myorg/*"
 ```

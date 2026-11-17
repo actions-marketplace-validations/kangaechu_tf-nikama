@@ -7,7 +7,9 @@
 すべての入力・キー・変数をデフォルト値つきで一覧にしたものは
 [PARAMETERS.ja.md](PARAMETERS.ja.md) を参照してください。
 
+- [古い plan コメントの折りたたみ](#古い-plan-コメントの折りたたみ)
 - [設定ファイル](#設定ファイル)
+- [タイムゾーン](#タイムゾーン)
 - [実行の流れ](#実行の流れ)
 - [ドラフトのプルリクエスト](#ドラフトのプルリクエスト)
 - [PR ロック](#pr-ロック)
@@ -26,6 +28,26 @@
 - [ローカルでの検証](#ローカルでの検証)
 - [終了コード](#終了コード)
 
+## 古い plan コメントの折りたたみ
+
+`comment.mode: single`（デフォルト）と `per_project` では、plan の実行が完了し、
+最終結果を投稿した後に、古い plan コメントを **outdated** として折りたたみます。
+対象は、コメントに記録されたすべてのプロジェクトで、新しい plan が成功した
+（`changes` または `no changes` になった）ものです。一部だけを再 plan した場合、
+他のプロジェクトの結果が残っているコメントは表示を維持します。複数に分割された
+コメントは実行全体の対象プロジェクトで判定し、プロジェクト別のコメントは
+それぞれ独立して折りたためます。
+
+折りたたむのは、同じ GitHub アカウントが投稿した、完了済みの古い nikama plan
+コメントだけです。apply コメントと実行中の結果は表示を維持します。`latest` は
+従来どおり既存のコメントを更新します。対象プロジェクトを記録するメタデータの
+導入前に投稿されたコメントも、そのまま表示します。変更のない plan が表から
+省略されている可能性があり、対象プロジェクト全体を確認できないためです。
+
+折りたたみには GitHub GraphQL の `minimizeComment` を `OUTDATED` 指定で使います。
+コメントは削除されず、展開して確認できます。トークンに折りたたみの権限がない場合は、
+警告をログに出し、Terraform の実行結果は変更しません。
+
 ## 設定ファイル
 
 リポジトリルートの `nikama.yml`（または `nikama.yaml`）。`digger.yml` も警告付きで
@@ -35,9 +57,24 @@
 トップレベルキー: `projects`、`workflows`、`generate_projects`、
 `dependency_configuration`、`traverse_to_nested_projects`、`auto_merge`、
 `auto_merge_strategy`、`pr_locks`、`allow_draft_prs`、`no_lock_label`、
-`wakeup_word`、`autoplan_modules`、`allowed_plan_args`、
+`wakeup_word`、`autoplan_modules`、`allowed_plan_args`、`timezone`、
 `drift_include_patterns`、`drift_exclude_patterns`、`concurrency`、`comment`、
 `allowed_providers`（互換性のために `git_timeout` と `telemetry` も受け付けます）。
+
+## タイムゾーン
+
+`timezone` に IANA タイムゾーン名を指定すると、plan・apply などの PR コメントに
+表示する実行開始時刻を、指定した地域の時刻に変換できます。
+
+```yaml
+timezone: Asia/Tokyo
+```
+
+たとえば `2026-01-15 18:30 UTC` は `2026-01-16 03:30 JST` と表示されます。
+デフォルトは `UTC` です。無効な名前を指定すると設定の検証でエラーになります。
+夏時間のある地域では自動で切り替わります。すべてのコメントモード
+（`single`、`per_project`、`latest`）に適用されます。
+ロックに保存する時刻や Terraform / OpenTofu の出力は変わりません。
 
 ## 実行の流れ
 
@@ -284,7 +321,7 @@ nikama が作成するため、ロールにはテーブルに対する `dynamodb
 オンデマンドキャパシティでテーブルを事前に作成してください。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -299,7 +336,7 @@ nikama が作成するため、ロールにはテーブルに対する `dynamodb
 ロックバケットは plan バケットと兼用できます。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           lock-provider: s3
           aws-lock-bucket: my-lock-bucket
@@ -319,7 +356,7 @@ Cloud Storage のバケットにします。サービスアカウントには両
         with:
           workload_identity_provider: projects/123456789012/locations/global/workloadIdentityPools/github/providers/github
           service_account: nikama@my-project.iam.gserviceaccount.com
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           lock-provider: gcp
           google-lock-bucket: my-lock-bucket
@@ -374,7 +411,7 @@ Cloud Storage のバケットにします。サービスアカウントには両
           private-key: ${{ secrets.NIKAMA_APP_PRIVATE_KEY }}
       - uses: actions/checkout@v7
         # ...
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           # ...
@@ -424,7 +461,7 @@ README のクイックスタートの `if:` ガードは、リポジトリ外か
   含むものを拒否します。
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           config-ref: default
           allow-run-steps: "false"
@@ -438,7 +475,7 @@ README のクイックスタートの `if:` ガードは、リポジトリ外か
 インストールできるものを制限します:
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.6.0
+      - uses: kangaechu/tf-nikama@v0.8.0
         with:
           allowed-providers: "hashicorp/aws, hashicorp/random, app.terraform.io/myorg/*"
 ```

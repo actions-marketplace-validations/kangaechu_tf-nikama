@@ -15,6 +15,7 @@ const MARKER: &str = "<!-- nikama:run=42:attempt=1 -->";
 
 fn report(command: Command, show: ShowEmptyPlans) -> RunReport {
     let mut r = RunReport::new(
+        chrono_tz::UTC,
         MARKER,
         command,
         "https://gh/o/r/actions/runs/42",
@@ -80,7 +81,14 @@ fn finished_header_and_empty_plan_modes() {
 
 #[test]
 fn apply_table_uses_apply_summary() {
-    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table, "nikama");
+    let mut r = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Apply,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     let row = r.row_mut("p");
     row.status = RowStatus::Applied;
     row.apply_summary = Some(ApplySummary {
@@ -99,7 +107,14 @@ fn apply_table_uses_apply_summary() {
 
 #[test]
 fn apply_row_shows_pre_plan_table_when_present() {
-    let mut r = RunReport::new(MARKER, Command::Apply, "u", ShowEmptyPlans::Table, "nikama");
+    let mut r = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Apply,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     let row = r.row_mut("p");
     row.status = RowStatus::Applied;
     row.detail_kind = Some(DetailKind::Apply);
@@ -116,7 +131,14 @@ fn apply_row_shows_pre_plan_table_when_present() {
 
 #[test]
 fn error_detail_and_failure_flags() {
-    let mut r = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
+    let mut r = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Plan,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     let row = r.row_mut("p");
     row.status = RowStatus::Failed;
     row.detail_kind = Some(DetailKind::Error);
@@ -145,6 +167,7 @@ fn per_project_rendering_has_distinct_markers() {
 #[test]
 fn long_details_are_truncated_with_a_log_link() {
     let mut r = RunReport::new(
+        chrono_tz::UTC,
         MARKER,
         Command::Plan,
         "https://run",
@@ -192,7 +215,14 @@ async fn writer_creates_then_edits_single_comment() {
         .mount(&server)
         .await;
 
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
+    let mut report = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Plan,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     report.row_mut("p");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     writer.flush().await;
@@ -236,7 +266,14 @@ async fn writer_reuses_existing_comment_with_marker() {
         .mount(&server)
         .await;
 
-    let report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
+    let report = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Plan,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     writer.finish().await;
     drop(writer);
@@ -268,7 +305,14 @@ async fn writer_finish_stops_task_while_clones_are_alive() {
         .mount(&server)
         .await;
 
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
+    let mut report = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Plan,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     report.row_mut("p");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::Single);
     let held_clone = writer.clone();
@@ -310,7 +354,14 @@ async fn writer_per_project_mode_creates_one_comment_per_project() {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
         .mount(&server)
         .await;
-    let mut report = RunReport::new(MARKER, Command::Plan, "u", ShowEmptyPlans::Table, "nikama");
+    let mut report = RunReport::new(
+        chrono_tz::UTC,
+        MARKER,
+        Command::Plan,
+        "u",
+        ShowEmptyPlans::Table,
+        "nikama",
+    );
     report.row_mut("a");
     report.row_mut("b");
     let (writer, task) = ReportWriter::start(github(&server), 5, report, CommentMode::PerProject);
@@ -390,4 +441,133 @@ async fn issue_notifier_creates_or_updates() {
     let n = GithubIssueNotifier::new(github(&server), "nikama");
     n.notify("fresh", "o/r", "plan").await.unwrap();
     n.notify("existing", "o/r", "plan").await.unwrap();
+}
+
+#[tokio::test]
+async fn writer_hides_only_fully_superseded_plans_after_publication() {
+    // Exercise the real REST publication and GraphQL mutation together.
+    for scenario in [
+        "success",
+        "partial",
+        "failed-plan",
+        "failed-publish",
+        "other-author",
+        "newer-comment",
+        "apply",
+        "latest",
+        "graphql-error",
+        "per-project",
+        "running",
+        "legacy",
+    ] {
+        let server = MockServer::start().await;
+        let mut old = RunReport::new(
+            chrono_tz::UTC,
+            "<!-- nikama:run=10:attempt=1 -->",
+            Command::Plan,
+            "https://gh/o/r/actions/runs/10",
+            ShowEmptyPlans::Hide,
+            "nikama",
+        );
+        old.row_mut("p").status = RowStatus::Changes;
+        old.row_mut("q").status = RowStatus::NoChanges;
+        old.finished = scenario != "running";
+        if scenario == "apply" {
+            old.command = Command::Apply;
+        }
+        let mut body = if scenario == "per-project" {
+            old.render_per_project().remove(0).1
+        } else {
+            old.render().remove(0)
+        };
+        if scenario == "legacy" {
+            body = body
+                .lines()
+                .filter(|line| !line.starts_with("<!-- nikama:scope "))
+                .collect::<Vec<_>>()
+                .join("\n");
+        }
+        Mock::given(method("GET")).and(path("/repos/o/r/issues/5/comments"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"id": if scenario == "newer-comment" { 99 } else { 10 },
+                 "node_id": "old-plan", "user": {"id": if scenario == "other-author" { 2 } else { 1 }},
+                 "body": body},
+                {"id": 9, "node_id": "human", "user": {"id": 1}, "body": "human comment"}
+            ]))).mount(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/repos/o/r/issues/5/comments"))
+            .respond_with(if scenario == "failed-publish" {
+                ResponseTemplate::new(403).set_body_json(json!({"message": "forbidden"}))
+            } else {
+                ResponseTemplate::new(201).set_body_json(json!({"id": 55, "user": {"id": 1}}))
+            })
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/o/r/issues/comments/55"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": 55})))
+            .mount(&server)
+            .await;
+        let hide = matches!(scenario, "success" | "graphql-error" | "per-project");
+        Mock::given(method("POST")).and(path("/graphql"))
+            .and(body_partial_json(json!({"variables": {"id": "old-plan"}})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(if scenario == "graphql-error" {
+                json!({"errors": [{"message": "forbidden"}]})
+            } else {
+                json!({"data": {"minimizeComment": {"minimizedComment": {"isMinimized": true}}}})
+            })).expect(if hide {1} else {0}).mount(&server).await;
+        let mut current = RunReport::new(
+            chrono_tz::UTC,
+            MARKER,
+            Command::Plan,
+            "u",
+            ShowEmptyPlans::Hide,
+            "nikama",
+        );
+        current.row_mut("p");
+        if !matches!(scenario, "partial" | "per-project") {
+            current.row_mut("q");
+        }
+        let mode = match scenario {
+            "latest" => CommentMode::Latest,
+            // A single project per comment lets p be replaced independently.
+            "per-project" => CommentMode::PerProject,
+            _ => CommentMode::Single,
+        };
+        let (writer, task) = ReportWriter::start(github(&server), 5, current, mode);
+        writer.flush().await;
+        assert!(!server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .any(|r| r.url.path() == "/graphql"));
+        writer.update(move |r| {
+            r.row_mut("p").status = if scenario == "failed-plan" {
+                RowStatus::Failed
+            } else {
+                RowStatus::Changes
+            };
+            if !matches!(scenario, "partial" | "per-project") {
+                r.row_mut("q").status = RowStatus::NoChanges;
+            }
+        });
+        writer.finish().await;
+        task.join().await;
+        let requests = server.received_requests().await.unwrap();
+        if hide {
+            let index = requests
+                .iter()
+                .position(|r| r.url.path() == "/graphql")
+                .unwrap();
+            let mutation: serde_json::Value =
+                serde_json::from_slice(&requests[index].body).unwrap();
+            assert!(mutation["query"]
+                .as_str()
+                .unwrap()
+                .contains("classifier: OUTDATED"));
+            assert!(requests[..index].iter().any(|r| r.method == "PATCH"));
+        }
+        server.verify().await;
+    }
 }
