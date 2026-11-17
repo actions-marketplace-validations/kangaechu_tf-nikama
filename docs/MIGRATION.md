@@ -67,7 +67,8 @@ Two behavioural differences in the config are worth knowing:
 
 - **`workflow_configuration` is filled in with defaults.** In Digger, writing
   the block made all three `on_*` keys mandatory. tf-nikama completes missing
-  keys with the defaults (`digger plan` / `digger unlock` / `digger unlock`).
+  keys with the defaults (`nikama plan` / `nikama unlock` / `nikama unlock`;
+  `digger ...` entries keep working).
 - **A missing config file is an error.** Digger continued with an empty
   configuration; tf-nikama exits with code 1.
 
@@ -208,7 +209,7 @@ What changed and why:
 | (none) | `lock-table` | New. Defaults to `DiggerDynamoDBLockTable`. |
 | `upload-plan-destination` | `upload-plan-destination` | `aws`, `gcp` or empty. `github` and `azure` are not supported. |
 | `upload-plan-destination-s3-*` | same names | Unchanged. |
-| `reporting-strategy` | `reporting-strategy` | Same values. `comments_per_run` now means one comment per run, edited in place. |
+| `reporting-strategy` | `reporting-strategy` | Same values, mapped to `comment.mode` in `nikama.yml` (which wins when written there). `comments_per_run` now means one comment per run, edited in place. |
 | `mode`, `command`, `project` | `mode`, `command`, `project` | Unchanged (manual and drift modes). |
 | `drift-detection-slack-notification-url` | same | Unchanged. |
 | `drift-github-issues` | same | Unchanged. Issues are labelled `digger`. |
@@ -277,7 +278,7 @@ These change what you see, not what you configure.
 | `dependency_configuration: hard` | no downstream expansion in the CLI | downstream projects are planned too |
 | Replace in plan summary | counted as create or delete | own column (`±`) |
 | `destroy` failure (manual mode) | reported as success | reported as failure |
-| `mergeable_state: blocked` | inspects check runs | inspects commit statuses other than `digger/*` |
+| `mergeable_state: blocked` | inspects check runs | inspects the review decision and the *required* check runs and commit statuses other than its own (`digger/*`), ignoring jobs of the current workflow run that are still running |
 | Telemetry | on by default | none |
 
 ## What is not supported
@@ -290,7 +291,7 @@ features are out of scope and rejected at startup or config load:
 - Azure locks and plan storage
 - Plan storage in GitHub Artifacts (`upload-plan-destination: github`)
 - OPA / rego policies and Checkov
-- GitLab, Bitbucket, Azure DevOps, GitHub Enterprise Server
+- GitLab, Bitbucket and Azure DevOps (GitHub Enterprise Server is not tested; `GITHUB_API_URL` is honoured)
 
 If you depend on any of these, stay on Digger.
 

@@ -28,10 +28,10 @@ fn defaults_are_applied() {
     let wf = &c.workflows["default"];
     assert_eq!(wf.plan, Stage::default_plan());
     assert_eq!(wf.apply, Stage::default_apply());
-    assert_eq!(wf.configuration.on_pull_request_pushed, vec!["digger plan"]);
+    assert_eq!(wf.configuration.on_pull_request_pushed, vec!["nikama plan"]);
     assert_eq!(
         wf.configuration.on_pull_request_closed,
-        vec!["digger unlock"]
+        vec!["nikama unlock"]
     );
     assert_eq!(c.pr_locks, LockMode::OnPlan);
     assert_eq!(c.no_lock_label, None);
@@ -44,7 +44,33 @@ fn defaults_are_applied() {
     assert_eq!(c.concurrency.apply_parallelism, 1);
     assert_eq!(c.timezone, chrono_tz::UTC);
     assert_eq!(c.comment.mode, CommentMode::Single);
+    assert!(!c.comment.mode_explicit);
     assert_eq!(c.comment.show_empty_plans, ShowEmptyPlans::Table);
+}
+
+#[test]
+fn comment_mode_is_flagged_when_written_and_maps_from_reporting_strategy() {
+    let c = load("projects: []\ncomment:\n  mode: single\n").unwrap();
+    assert_eq!(c.comment.mode, CommentMode::Single);
+    assert!(c.comment.mode_explicit);
+    let c = load("projects: []\ncomment:\n  show_empty_plans: hide\n").unwrap();
+    assert!(!c.comment.mode_explicit);
+
+    // Digger's reporting-strategy names.
+    assert_eq!(
+        CommentMode::from_reporting_strategy("comments_per_run"),
+        Some(CommentMode::Single)
+    );
+    assert_eq!(
+        CommentMode::from_reporting_strategy(" Per_Project "),
+        Some(CommentMode::PerProject)
+    );
+    assert_eq!(
+        CommentMode::from_reporting_strategy("latest_run_comment"),
+        Some(CommentMode::Latest)
+    );
+    assert_eq!(CommentMode::from_reporting_strategy("single"), None);
+    assert_eq!(CommentMode::from_reporting_strategy(""), None);
 }
 
 #[test]
@@ -123,8 +149,8 @@ fn workflow_configuration_fills_missing_keys() {
         cfg.on_pull_request_pushed,
         vec!["digger plan", "digger lock"]
     );
-    assert_eq!(cfg.on_pull_request_closed, vec!["digger unlock"]);
-    assert_eq!(cfg.on_commit_to_default, vec!["digger unlock"]);
+    assert_eq!(cfg.on_pull_request_closed, vec!["nikama unlock"]);
+    assert_eq!(cfg.on_commit_to_default, vec!["nikama unlock"]);
     assert!(cfg.on_pull_request_to_draft.is_empty());
     assert!(cfg.skip_merge_check);
 }
@@ -616,10 +642,11 @@ fn workflow_configuration_accepts_the_configured_wakeup_word() {
         c.workflows["w"].configuration.on_pull_request_pushed,
         vec!["tf plan", "digger lock"]
     );
-    // Default `digger plan` / `digger unlock` entries stay valid whatever the word.
+    // The defaults (`nikama plan` / `nikama unlock`) and Digger-era entries
+    // (`digger lock` above) stay valid whatever the word.
     assert_eq!(
         c.workflows["default"].configuration.on_pull_request_pushed,
-        vec!["digger plan"]
+        vec!["nikama plan"]
     );
     let r = load("projects: []\nworkflows:\n  w:\n    workflow_configuration:\n      on_pull_request_pushed: [\"tf plan\"]\n");
     assert!(err_msg(r).contains("unknown command 'tf plan'"));
