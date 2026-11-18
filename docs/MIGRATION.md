@@ -151,7 +151,7 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::123456789012:role/digger
           aws-region: ap-northeast-1
-      - uses: kangaechu/tf-nikama@v0.8.0
+      - uses: kangaechu/tf-nikama@v0.9.0
         with:
           upload-plan-destination: aws
           upload-plan-destination-s3-bucket: my-plan-bucket
@@ -212,7 +212,7 @@ What changed and why:
 | `reporting-strategy` | `reporting-strategy` | Same values, mapped to `comment.mode` in `nikama.yml` (which wins when written there). `comments_per_run` now means one comment per run, edited in place. |
 | `mode`, `command`, `project` | `mode`, `command`, `project` | Unchanged (manual and drift modes). |
 | `drift-detection-slack-notification-url` | same | Unchanged. |
-| `drift-github-issues` | same | Unchanged. Issues are labelled `digger`. |
+| `drift-github-issues` | same | The default label is `digger`. Set `drift-github-issue-label` to override it. |
 | `github-token` | `github-token` | Unchanged. |
 | (none) | `max-parallel`, `log-level`, `version` | New. |
 | (none) | `config-ref`, `allow-run-steps` | New. Read `nikama.yml` from a trusted ref on PR runs / refuse `run:` steps ([CONFIGURATION.md](CONFIGURATION.md) "Trusting the configuration"). |
@@ -225,7 +225,7 @@ What changed and why:
 above and keep the rest:
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.8.0
+      - uses: kangaechu/tf-nikama@v0.9.0
         with:
           mode: manual
           command: digger apply
@@ -233,7 +233,7 @@ above and keep the rest:
 ```
 
 ```yaml
-      - uses: kangaechu/tf-nikama@v0.8.0
+      - uses: kangaechu/tf-nikama@v0.9.0
         with:
           mode: drift-detection
           drift-detection-slack-notification-url: ${{ secrets.SLACK_WEBHOOK }}
